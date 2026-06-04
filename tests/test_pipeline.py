@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from eduforge.artifacts import Artifact, ArtifactStore
-from eduforge.config import PipelineConfig, load_pipeline
+from eduforge.config import PipelineConfig, StageType, load_pipeline
 from eduforge.executor import ExecutorStage
 from eduforge.notebook import build_notebook, cells_from_json, render_indexed
 
@@ -66,6 +66,21 @@ def test_config_rejects_llm_stage_without_persona():
         PipelineConfig.model_validate(broken)
 
 
+def test_revision_policy_requires_baseline_executor_and_notebook():
+    broken = {
+        "name": "bad",
+        "stages": [
+            {"name": "planner", "persona": "planner.md", "inputs": ["brief"], "output": "plan"},
+        ],
+        "revision": {
+            "reviser": "reviser.md",
+            "critics": ["student.md"],
+        },
+    }
+    with pytest.raises(ValueError, match="Revision policy requires"):
+        PipelineConfig.model_validate(broken)
+
+
 # ── Notebook assembly ────────────────────────────────────────────────────────
 
 def test_cells_from_json_handles_bare_array():
@@ -112,10 +127,11 @@ def test_render_indexed_labels_cells_consistently():
 def test_review_loop_config_validates():
     pipeline = load_pipeline(CONFIG_DIR / "pipeline.review-loop.yaml")
     names = [s.name for s in pipeline.stages]
-    # The loop re-runs and re-checks the revised notebook.
-    assert "reviser" in names
-    assert names.index("executor_revised") > names.index("reviser")
-    assert names.index("student_revised") > names.index("executor_revised")
+    assert names == ["planner", "code_author", "executor", "student", "reviewer"]
+    assert pipeline.revision is not None
+    assert pipeline.revision.reviser == "reviser.md"
+    assert pipeline.revision.critics == ["student.md", "reviewer.md"]
+    assert pipeline.revision.max_iterations == 3
 
 
 # ── Executor (the anti-bug layer) ────────────────────────────────────────────
@@ -229,10 +245,42 @@ def test_clean_keeps_newest_runs(tmp_path):
 
 from eduforge.executor import executed_notebook_filename  # noqa: E402
 from eduforge.gate import evaluate_candidates, notebook_candidates  # noqa: E402
-
-
 def _review_loop_pipeline() -> PipelineConfig:
-    return load_pipeline(CONFIG_DIR / "pipeline.review-loop.yaml")
+    return PipelineConfig.model_validate(
+        {
+            "name": "review-loop",
+            "stages": [
+                {"name": "planner", "persona": "planner.md", "inputs": ["brief", "profile"],
+                 "output": "lesson_plan"},
+                {"name": "code_author", "persona": "code_author.md",
+                 "inputs": ["lesson_plan", "profile"], "output": "notebook",
+                 "output_kind": "notebook",
+                 "model": {"provider": "openai", "model": "gpt-4o-mini",
+                           "temperature": 0.2, "max_tokens": 4096}},
+                {"name": "executor", "type": "executor", "inputs": ["notebook"],
+                 "output": "execution_report"},
+                {"name": "student", "persona": "student.md",
+                 "inputs": ["notebook", "execution_report", "profile"],
+                 "output": "student_feedback"},
+                {"name": "reviewer", "persona": "reviewer.md",
+                 "inputs": ["notebook", "execution_report", "profile"],
+                 "output": "reviewer_feedback"},
+                {"name": "reviser", "persona": "reviser.md",
+                 "inputs": ["notebook", "student_feedback", "reviewer_feedback", "profile"],
+                 "output": "revised_notebook", "output_kind": "notebook",
+                 "model": {"provider": "openai", "model": "gpt-4o-mini",
+                           "temperature": 0.2, "max_tokens": 4096}},
+                {"name": "executor_revised", "type": "executor",
+                 "inputs": ["revised_notebook"], "output": "revised_execution_report"},
+                {"name": "student_revised", "persona": "student.md",
+                 "inputs": ["revised_notebook", "revised_execution_report", "profile"],
+                 "output": "revised_feedback"},
+                {"name": "reviewer_revised", "persona": "reviewer.md",
+                 "inputs": ["revised_notebook", "revised_execution_report", "profile"],
+                 "output": "revised_reviewer_feedback"},
+            ],
+        }
+    )
 
 
 def _put_report(store: ArtifactStore, report_name: str, ok: bool) -> None:
@@ -281,6 +329,70 @@ def _populate_review_loop(store, *, orig_ok, orig_fb, revised_ok, revised_fb,
     _put_report(store, "revised_execution_report", ok=revised_ok)
     _put_text(store, "revised_feedback", revised_fb)
     _put_text(store, "revised_reviewer_feedback", revised_review_fb)
+
+
+def _scripted_runner_factory(*, notebook_markers: dict[str, str], text_outputs: dict[str, str],
+                             report_ok: dict[str, bool]):
+    """Build a deterministic runner factory for orchestrator loop tests."""
+
+    class _Runner:
+        def __init__(self, stage):
+            self._stage = stage
+
+        def run(self, store: ArtifactStore):
+            if self._stage.type is StageType.EXECUTOR:
+                return self._run_executor(store)
+            return self._run_llm(store)
+
+        def _run_executor(self, store: ArtifactStore):
+            input_name = self._stage.inputs[0]
+            executed_name = executed_notebook_filename(self._stage.output)
+            store.write_file(executed_name, store.get(input_name).content)
+            ok = report_ok.get(self._stage.output, True)
+            report = {
+                "ok": ok,
+                "executed_notebook": executed_name,
+                "code_cell_count": 1,
+                "failed_cell_count": 0 if ok else 1,
+                "harness_error": None,
+                "cells": [],
+            }
+            return store.put(Artifact(
+                name=self._stage.output,
+                kind="json",
+                content=json.dumps(report),
+            ))
+
+        def _run_llm(self, store: ArtifactStore):
+            if self._stage.output_kind == "notebook":
+                marker = notebook_markers[self._stage.output]
+                return store.put(Artifact(
+                    name=self._stage.output,
+                    kind="notebook",
+                    content=build_notebook([{"type": "code", "source": marker}]),
+                ))
+            content = text_outputs[self._stage.output]
+            return store.put(Artifact(
+                name=self._stage.output,
+                kind="text",
+                content=content,
+            ))
+
+    return lambda stage: _Runner(stage)
+
+
+def _revision_store(tmp_path: Path, *, baseline_fb: str, revision_fb: str,
+                    baseline_ok: bool = True, revision_ok: bool = True) -> ArtifactStore:
+    store = ArtifactStore(tmp_path)
+    _put_notebook(store, "notebook", "baseline")
+    _put_report(store, "execution_report", ok=baseline_ok)
+    _put_text(store, "student_feedback", baseline_fb)
+    _put_text(store, "reviewer_feedback", CLEAN_FEEDBACK)
+    _put_notebook(store, "revised_notebook__i1", "revision-1")
+    _put_report(store, "revised_execution_report__i1", ok=revision_ok)
+    _put_text(store, "student_feedback__i1", revision_fb)
+    _put_text(store, "reviewer_feedback__i1", CLEAN_FEEDBACK)
+    return store
 
 
 def test_notebook_candidates_link_each_version_to_its_report_and_critics():
@@ -418,7 +530,7 @@ def test_orchestrator_delivers_the_accepted_notebook(tmp_path):
                      build_notebook([{"type": "code", "source": "v = 'revised'"}]))
 
     orch = Orchestrator(_review_loop_pipeline(), tmp_path, tmp_path)
-    orch._finalize(store, "Some topic", "default.md")
+    orch._finalize(store, "Some topic", "default.md", _review_loop_pipeline())
 
     delivered = store.read_file("lesson.ipynb")
     assert "v = 'original'" in delivered
@@ -429,6 +541,83 @@ def test_orchestrator_delivers_the_accepted_notebook(tmp_path):
     assert manifest["gate"]["satisfied"] is True
     assert manifest["gate"]["delivered_quality"] == 100
     assert len(manifest["gate"]["candidates"]) == 2
+
+
+def test_orchestrator_runs_revision_loop_until_good_enough(tmp_path):
+    from eduforge.orchestrator import Orchestrator
+
+    pipeline = load_pipeline(CONFIG_DIR / "pipeline.review-loop.yaml")
+    runner = _scripted_runner_factory(
+        notebook_markers={
+            "notebook": "baseline",
+            "revised_notebook__i1": "revision-1",
+        },
+        text_outputs={
+            "lesson_plan": "plan",
+            "student_feedback": _confusing(3),
+            "reviewer_feedback": CLEAN_FEEDBACK,
+            "student_feedback__i1": CLEAN_FEEDBACK,
+            "reviewer_feedback__i1": CLEAN_FEEDBACK,
+        },
+        report_ok={
+            "execution_report": True,
+            "revised_execution_report__i1": True,
+        },
+    )
+
+    runs_root = tmp_path / "runs"
+    orch = Orchestrator(pipeline, tmp_path, runs_root, runner_factory=runner)
+    store = orch.run("How a hash map works", "default.md", profile_label="learner.md")
+
+    delivered = store.read_file("lesson.ipynb")
+    assert "revision-1" in delivered
+    assert "baseline" not in delivered
+
+    manifest = json.loads(store.read_file("manifest.json"))
+    assert manifest["status"] == "completed"
+    assert manifest["gate"]["iterations"] == 2
+    assert manifest["gate"]["delivered_iteration"] == 2
+    assert manifest["gate"]["quality_scores"] == [85, 100]
+    assert manifest["gate"]["satisfied"] is True
+
+    summary = store.read_file("SUMMARY.md")
+    assert "**Iterations:** 2" in summary
+    assert "**Quality trend:** 85 → 100" in summary
+
+
+def test_orchestrator_hard_fails_when_crucial_issues_remain(tmp_path):
+    from eduforge.orchestrator import Orchestrator
+
+    pipeline = load_pipeline(CONFIG_DIR / "pipeline.review-loop.yaml")
+    runner = _scripted_runner_factory(
+        notebook_markers={
+            "notebook": "baseline",
+            "revised_notebook__i1": "revision-1",
+        },
+        text_outputs={
+            "lesson_plan": "plan",
+            "student_feedback": BLOCKER_FEEDBACK,
+            "reviewer_feedback": CLEAN_FEEDBACK,
+            "student_feedback__i1": BLOCKER_FEEDBACK,
+            "reviewer_feedback__i1": CLEAN_FEEDBACK,
+        },
+        report_ok={
+            "execution_report": True,
+            "revised_execution_report__i1": True,
+        },
+    )
+
+    runs_root = tmp_path / "runs"
+    orch = Orchestrator(pipeline, tmp_path, runs_root, runner_factory=runner)
+
+    with pytest.raises(RuntimeError, match="crucial issue still open"):
+        orch.run("How a hash map works", "default.md", profile_label="learner.md")
+
+    run_dir = next(runs_root.iterdir())
+    manifest = json.loads((run_dir / "manifest.json").read_text())
+    assert manifest["status"] == "failed"
+    assert manifest["gate"]["crucial_open"] is True
+    assert not (run_dir / "lesson.ipynb").exists()
 
 
 def test_summary_surfaces_quality_and_residual_issues(tmp_path):

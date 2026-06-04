@@ -59,6 +59,7 @@ def _acceptance_section(decision: "GateDecision | None", store: ArtifactStore) -
     if decision is None or decision.chosen is None:
         return []
     chosen = decision.chosen
+    scores = [result.quality_score for result in decision.results]
 
     if decision.crucial_open:
         verdict = "✗ NEEDS HUMAN REVIEW — crucial issue(s) still open"
@@ -73,6 +74,8 @@ def _acceptance_section(decision: "GateDecision | None", store: ArtifactStore) -
         "",
         f"- **Shipped:** {chosen.candidate.notebook} — quality "
         f"{chosen.quality_score}/100",
+        f"- **Iterations:** {len(decision.results)}",
+        f"- **Quality trend:** {' → '.join(str(score) for score in scores)}",
         f"- **Verdict:** {verdict}",
     ]
 

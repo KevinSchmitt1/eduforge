@@ -64,12 +64,24 @@ class StageConfig(BaseModel):
         return self
 
 
+class RevisionPolicy(BaseModel):
+    """How the bounded revision loop should behave."""
+
+    max_iterations: int = Field(default=3, ge=1)
+    min_quality_score: int = Field(default=90, ge=0, le=100)
+    require_progress: bool = True
+    reviser: str
+    critics: list[str] = Field(min_length=1)
+    executor_params: dict = Field(default_factory=dict)
+
+
 class PipelineConfig(BaseModel):
     """The whole pipeline: ordered stages plus shared defaults."""
 
     name: str
     defaults: ModelConfig = Field(default_factory=ModelConfig)
     stages: list[StageConfig]
+    revision: RevisionPolicy | None = None
 
     @model_validator(mode="after")
     def _check_dataflow(self) -> PipelineConfig:
@@ -97,6 +109,15 @@ class PipelineConfig(BaseModel):
                     "already produced upstream — use a distinct name"
                 )
             produced.add(stage.output)
+
+        if self.revision is not None:
+            has_executor = any(stage.type is StageType.EXECUTOR for stage in self.stages)
+            has_notebook = any(stage.output_kind == "notebook" for stage in self.stages)
+            if not has_executor or not has_notebook:
+                raise ValueError(
+                    "Revision policy requires at least one executor and one notebook "
+                    "output in the linear pipeline"
+                )
         return self
 
     def resolved_model(self, stage: StageConfig) -> ModelConfig:

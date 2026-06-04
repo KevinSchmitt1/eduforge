@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import os
 
-from openai import OpenAI
+try:
+    from openai import OpenAI
+except ModuleNotFoundError:  # pragma: no cover - optional dependency
+    OpenAI = None  # type: ignore[assignment]
 
 from .config import ModelConfig, Provider
 
@@ -27,6 +30,11 @@ class LLMClient:
 
     def __init__(self, config: ModelConfig):
         self._config = config
+        if OpenAI is None:
+            raise RuntimeError(
+                "The openai package is not installed. Install it to run LLM-backed "
+                "stages, or switch the pipeline to a local/non-LLM path."
+            )
         self._client = OpenAI(**_connection_kwargs(config.provider))
 
     def complete(self, system_prompt: str, user_prompt: str) -> str:

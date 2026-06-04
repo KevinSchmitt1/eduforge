@@ -41,6 +41,81 @@ class Finding:
     text: str
 
 
+@dataclass(frozen=True)
+class LedgerEntry:
+    """One notebook version and the issues attached to it."""
+
+    label: str
+    notebook: str
+    report: str
+    executed_ok: bool
+    quality_score: int
+    findings: tuple[Finding, ...]
+
+
+class IssueLedger:
+    """Running history of issues for the reviser.
+
+    The ledger is intentionally simple: it accumulates each version's findings and
+    renders them as a readable history so the reviser can see what has already been
+    tried and what is still open.
+    """
+
+    def __init__(self) -> None:
+        self._entries: list[LedgerEntry] = []
+
+    def add(
+        self,
+        label: str,
+        notebook: str,
+        report: str,
+        executed_ok: bool,
+        quality_score: int,
+        findings: tuple[Finding, ...],
+    ) -> None:
+        self._entries.append(
+            LedgerEntry(
+                label=label,
+                notebook=notebook,
+                report=report,
+                executed_ok=executed_ok,
+                quality_score=quality_score,
+                findings=findings,
+            )
+        )
+
+    @property
+    def entries(self) -> tuple[LedgerEntry, ...]:
+        return tuple(self._entries)
+
+    def latest_quality_score(self) -> int | None:
+        if not self._entries:
+            return None
+        return self._entries[-1].quality_score
+
+    def render(self) -> str:
+        if not self._entries:
+            return "Issue ledger: (empty)"
+
+        lines = ["Issue ledger", ""]
+        for index, entry in enumerate(self._entries, start=1):
+            execution = "clean" if entry.executed_ok else "failed"
+            lines += [
+                f"## Version {index}: {entry.label}",
+                f"- notebook: `{entry.notebook}`",
+                f"- report: `{entry.report}`",
+                f"- execution: {execution}",
+                f"- quality: {entry.quality_score}/100",
+            ]
+            if entry.findings:
+                lines.append("- findings:")
+                lines += [f"  - {finding.text}" for finding in entry.findings]
+            else:
+                lines.append("- findings: none")
+            lines.append("")
+        return "\n".join(lines).rstrip()
+
+
 def parse_findings(feedback: str) -> tuple[Finding, ...]:
     """Extract findings from a critic's free-text feedback, in order."""
     findings: list[Finding] = []
