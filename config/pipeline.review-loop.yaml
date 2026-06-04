@@ -1,0 +1,68 @@
+# Closed-loop pipeline: builds a lesson, critiques it from the learner's POV,
+# revises it, then RE-RUNS and RE-CRITIQUES so you can see if the revision helped.
+#
+#   brief    \
+#   profile  -> planner -> code_author -> executor -> student ->
+#                          reviser -> executor(revised) -> student(revised)
+#
+# Same code as the skeleton — only this config differs. That is the whole point:
+# the "team" is data, not code. Add/remove a reviewer, a second reviser, etc. here.
+
+name: review-loop
+
+defaults:
+  provider: openai
+  model: gpt-4o-mini
+  temperature: 0.4
+  max_tokens: 4096
+
+stages:
+  - name: planner
+    type: llm
+    persona: planner.md
+    inputs: [brief, profile]
+    output: lesson_plan
+    output_kind: text
+
+  - name: code_author
+    type: llm
+    persona: code_author.md
+    inputs: [lesson_plan, profile]
+    output: notebook
+    output_kind: notebook
+    model: {provider: openai, model: gpt-4o-mini, temperature: 0.2, max_tokens: 4096}
+
+  - name: executor
+    type: executor
+    inputs: [notebook]
+    output: execution_report
+    params: {timeout: 120, kernel: python3}
+
+  - name: student
+    type: llm
+    persona: student.md
+    inputs: [notebook, execution_report, profile]
+    output: student_feedback
+    output_kind: text
+
+  # ── The loop: revise from feedback, then re-run and re-check ────────────────
+  - name: reviser
+    type: llm
+    persona: reviser.md
+    inputs: [notebook, student_feedback, profile]
+    output: revised_notebook
+    output_kind: notebook
+    model: {provider: openai, model: gpt-4o-mini, temperature: 0.2, max_tokens: 4096}
+
+  - name: executor_revised
+    type: executor
+    inputs: [revised_notebook]
+    output: revised_execution_report
+    params: {timeout: 120, kernel: python3}
+
+  - name: student_revised
+    type: llm
+    persona: student.md
+    inputs: [revised_notebook, revised_execution_report, profile]
+    output: revised_feedback
+    output_kind: text

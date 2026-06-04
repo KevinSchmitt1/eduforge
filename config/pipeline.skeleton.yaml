@@ -1,0 +1,58 @@
+# Walking-skeleton pipeline: proves the whole architecture end-to-end on the
+# smallest useful flow. Edit this file to add/remove/reorder stages — that is the
+# "dynamic pipeline" knob. No Python changes needed to change the team.
+#
+#   brief    \                                                      executor --> report
+#   profile  --> planner --> lesson_plan --> code_author --> notebook --> |--> student --> feedback
+#
+# The executor actually RUNS the notebook and records what each cell really does.
+# The student then judges the notebook against that real execution report, from the
+# specific prior-knowledge level described in the profile.
+
+name: skeleton
+
+# Shared model defaults. Any stage can override with its own `model:` block.
+# Switch provider to `ollama` (and model to e.g. `llama3.1`) for fully local runs.
+defaults:
+  provider: openai
+  model: gpt-4o-mini
+  temperature: 0.4
+  max_tokens: 4096
+
+stages:
+  - name: planner
+    type: llm
+    persona: planner.md
+    inputs: [brief, profile]
+    output: lesson_plan
+    output_kind: text
+
+  - name: code_author
+    type: llm
+    persona: code_author.md
+    inputs: [lesson_plan, profile]
+    output: notebook
+    output_kind: notebook
+    # Code generation benefits from low temperature (fewer silly mistakes).
+    model:
+      provider: openai
+      model: gpt-4o-mini
+      temperature: 0.2
+      max_tokens: 4096
+
+  - name: executor
+    type: executor
+    inputs: [notebook]
+    output: execution_report
+    params:
+      timeout: 120
+      kernel: python3
+
+  - name: student
+    type: llm
+    persona: student.md
+    # Judges the notebook against what it ACTUALLY did (execution_report),
+    # from the prior-knowledge level in the profile.
+    inputs: [notebook, execution_report, profile]
+    output: student_feedback
+    output_kind: text

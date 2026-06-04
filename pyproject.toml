@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eduforge"
+version = "0.1.0"
+description = "A multi-agent CLI that builds and self-checks IT learning notebooks"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "eduforge contributors" }]
+keywords = ["education", "notebooks", "agents", "llm", "jupyter"]
+
+dependencies = [
+    "openai>=1.30.0",      # OpenAI + Ollama (OpenAI-compatible) client
+    "pydantic>=2.0.0",     # config validation
+    "pyyaml>=6.0",         # pipeline config files
+    "nbformat>=5.10.0",    # assemble .ipynb
+    "nbclient>=0.10.0",    # execute notebooks (the anti-bug layer)
+    "ipykernel>=6.29.0",   # kernel for execution
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0"]
+
+[project.scripts]
+eduforge = "eduforge.cli:main"
+
+[tool.setuptools]
+packages = ["eduforge"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
