@@ -77,16 +77,19 @@ def state_with_plan(artifact_store: ArtifactStore) -> PipelineState:
 @pytest.fixture
 def state_with_notebook(artifact_store: ArtifactStore) -> PipelineState:
     """Pipeline state after code author ran — has a lesson_notebook artifact."""
+    import nbformat
+
     state = create_initial_state(run_id="test-run-003")
-    notebook_cells = [
-        {"type": "markdown", "source": "# Hash Maps\n\nIntroduction to hash maps."},
-        {"type": "code", "source": "data = {'key': 'value'}\nprint(data)"},
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells = [
+        nbformat.v4.new_markdown_cell("# Hash Maps\n\nIntroduction to hash maps."),
+        nbformat.v4.new_code_cell("data = {'key': 'value'}\nprint(data)"),
     ]
     artifact_store.put(
         Artifact(
             name="lesson_notebook_v0",
             kind="notebook",
-            content=json.dumps(notebook_cells),
+            content=nbformat.writes(notebook),
         )
     )
     return state.with_output(
@@ -101,6 +104,8 @@ def state_with_notebook(artifact_store: ArtifactStore) -> PipelineState:
 @pytest.fixture
 def state_with_execution(artifact_store: ArtifactStore) -> PipelineState:
     """Pipeline state after executor ran — has execution_report artifact."""
+    import nbformat
+
     state = create_initial_state(run_id="test-run-004")
     exec_report = {"ok": True, "failed_cells": [], "error_summary": None}
     artifact_store.put(
@@ -110,12 +115,13 @@ def state_with_execution(artifact_store: ArtifactStore) -> PipelineState:
             content=json.dumps(exec_report),
         )
     )
-    notebook_cells = [
-        {"type": "markdown", "source": "# Hash Maps"},
-        {"type": "code", "source": "print('hello')"},
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells = [
+        nbformat.v4.new_markdown_cell("# Hash Maps"),
+        nbformat.v4.new_code_cell("print('hello')"),
     ]
     artifact_store.put(
-        Artifact(name="lesson_notebook_v0", kind="notebook", content=json.dumps(notebook_cells))
+        Artifact(name="lesson_notebook_v0", kind="notebook", content=nbformat.writes(notebook))
     )
     return state.with_output(
         StageOutput(
@@ -124,6 +130,33 @@ def state_with_execution(artifact_store: ArtifactStore) -> PipelineState:
             iteration=0,
         )
     ).with_current_stage(PipelineStage.STUDENT)
+
+
+@pytest.fixture
+def state_with_failing_notebook(artifact_store: ArtifactStore) -> PipelineState:
+    """Pipeline state after code author ran — has a notebook with intentionally failing cell."""
+    import nbformat
+
+    state = create_initial_state(run_id="test-run-006")
+    notebook = nbformat.v4.new_notebook()
+    notebook.cells = [
+        nbformat.v4.new_markdown_cell("# Failing Notebook"),
+        nbformat.v4.new_code_cell("undefined_variable_that_will_fail"),
+    ]
+    artifact_store.put(
+        Artifact(
+            name="lesson_notebook_v0",
+            kind="notebook",
+            content=nbformat.writes(notebook),
+        )
+    )
+    return state.with_output(
+        StageOutput(
+            stage=PipelineStage.CODE_AUTHOR,
+            artifact_name="lesson_notebook_v0",
+            iteration=0,
+        )
+    ).with_current_stage(PipelineStage.EXECUTOR)
 
 
 @pytest.fixture
@@ -397,6 +430,33 @@ def test_executor_agent_run_is_immutable(
     )
     assert state_with_notebook.current_stage == original_stage
     assert len(state_with_notebook.outputs) == original_outputs_count
+
+
+@pytest.mark.integration
+def test_executor_agent_detects_failing_notebook(
+    personas_dir: Path,
+    state_with_failing_notebook: PipelineState,
+    artifact_store: ArtifactStore,
+) -> None:
+    """ExecutorAgent.run() detects notebook execution failures via real executor."""
+    from forged.pipeline.agents.executor import ExecutorAgent
+
+    agent = ExecutorAgent(personas_dir=personas_dir)
+    result = asyncio.get_event_loop().run_until_complete(
+        agent.run(state_with_failing_notebook, artifact_store)
+    )
+
+    artifact_name = result.outputs[-1].artifact_name
+    assert artifact_store.has(artifact_name)
+    content = artifact_store.get(artifact_name).content
+    parsed = json.loads(content)
+
+    assert parsed["ok"] is False, "Notebook with NameError should report ok=False"
+    assert len(parsed["failed_cells"]) > 0, "Should detect at least one failed cell"
+    assert parsed["error_summary"] is not None, "Should include error summary"
+    assert "NameError" in parsed["error_summary"] or "Error" in parsed[
+        "error_summary"
+    ], "Error summary should mention the error type"
 
 
 # ── StudentAgent tests ────────────────────────────────────────────────────────

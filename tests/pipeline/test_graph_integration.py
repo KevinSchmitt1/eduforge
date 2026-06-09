@@ -561,6 +561,91 @@ def test_graph_handles_missing_artifact(
     assert final_state.is_terminal
 
 
+# ── Phase 7: Real Executor integration tests ───────────────────────────────────
+
+
+@pytest.mark.integration
+def test_real_executor_detects_code_quality_failure(
+    personas_dir: Path, artifact_store: ArtifactStore
+) -> None:
+    """Real executor detects failing notebook; pipeline classifies as CODE_QUALITY and routes to CodeAuthor.
+
+    This test verifies Phase 7: the real ExecutorStage correctly identifies
+    execution failures, leading to CODE_QUALITY classification and rerouting.
+    """
+    from forged.pipeline.agents.code_author import CodeAuthorAgent
+    from forged.pipeline.agents.executor import ExecutorAgent
+    from forged.pipeline.agents.planner import PlannerAgent
+    from forged.pipeline.agents.student import StudentAgent
+    from forged.pipeline.graph import run_pipeline
+
+    call_count = {"code_author": 0}
+
+    def planner_run(state: PipelineState, store: ArtifactStore) -> PipelineState:
+        store.put(Artifact(name=f"lesson_plan_v{state.iteration}", kind="text", content="Plan"))
+        output = StageOutput(
+            stage=PipelineStage.PLANNER,
+            artifact_name=f"lesson_plan_v{state.iteration}",
+            iteration=state.iteration,
+        )
+        return state.with_output(output).with_current_stage(PipelineStage.CODE_AUTHOR)
+
+    def code_author_run(state: PipelineState, store: ArtifactStore) -> PipelineState:
+        import nbformat
+
+        call_count["code_author"] += 1
+        notebook = nbformat.v4.new_notebook()
+        source_code = (
+            "print('hello')" if call_count["code_author"] > 1 else "undefined_variable_that_fails"
+        )
+        notebook.cells = [
+            nbformat.v4.new_markdown_cell("# Test Lesson"),
+            nbformat.v4.new_code_cell(source_code),
+        ]
+        store.put(
+            Artifact(
+                name=f"lesson_notebook_v{state.iteration}",
+                kind="notebook",
+                content=nbformat.writes(notebook),
+            )
+        )
+        output = StageOutput(
+            stage=PipelineStage.CODE_AUTHOR,
+            artifact_name=f"lesson_notebook_v{state.iteration}",
+            iteration=state.iteration,
+        )
+        return state.with_output(output).with_current_stage(PipelineStage.EXECUTOR)
+
+    def student_run(state: PipelineState, store: ArtifactStore) -> PipelineState:
+        grade_report = json.dumps({"quality_score": 90.0, "blockers": [], "findings": []})
+        store.put(
+            Artifact(
+                name=f"student_grade_report_v{state.iteration}", kind="json", content=grade_report
+            )
+        )
+        output = StageOutput(
+            stage=PipelineStage.STUDENT,
+            artifact_name=f"student_grade_report_v{state.iteration}",
+            iteration=state.iteration,
+        )
+        return state.with_output(output).with_current_stage(PipelineStage.REVISER)
+
+    initial_state = create_initial_state(run_id="test-real-executor")
+
+    with (
+        patch.object(PlannerAgent, "run", AsyncMock(side_effect=planner_run)),
+        patch.object(CodeAuthorAgent, "run", AsyncMock(side_effect=code_author_run)),
+        patch.object(StudentAgent, "run", AsyncMock(side_effect=student_run)),
+    ):
+        final_state = asyncio.get_event_loop().run_until_complete(
+            run_pipeline(initial_state, artifact_store, personas_dir)
+        )
+
+    assert isinstance(final_state, PipelineState)
+    assert final_state.is_terminal, "Pipeline should terminate (accept second attempt or hit budget)"
+    assert call_count["code_author"] >= 2, "CodeAuthor should have been called at least twice (initial + reroute)"
+
+
 # ── Determinism tests ──────────────────────────────────────────────────────────
 
 

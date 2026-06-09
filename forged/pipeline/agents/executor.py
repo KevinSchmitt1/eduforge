@@ -5,18 +5,23 @@ Input artifacts: lesson_notebook_v{N}.ipynb  (reads latest from outputs)
 Output artifact: execution_report_v{iteration}.json  (kind=json)
 Next stage: STUDENT
 
-In Phase 5 the execution is mocked (always succeeds).  Phase 6 replaces
-_mock_execute() with the real forged.executor logic that runs nbclient.
+Phase 7: Wired to real forged.executor.ExecutorStage. Detects actual notebook
+execution failures and produces detailed cell-level reports.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 
 from forged.artifacts import Artifact, ArtifactStore
+from forged.config import StageConfig, StageType
+from forged.executor import ExecutorStage
 from forged.pipeline.state import PipelineStage, PipelineState, StageOutput
 
 from . import Agent, AgentOutput
+
+logger = logging.getLogger(__name__)
 
 
 class ExecutorAgent(Agent[AgentOutput]):
@@ -34,8 +39,16 @@ class ExecutorAgent(Agent[AgentOutput]):
 
     async def run(self, state: PipelineState, store: ArtifactStore) -> PipelineState:
         notebook_name = self._latest_notebook_name(state)
-        notebook_content = store.get(notebook_name).content if store.has(notebook_name) else "[]"
-        report = self._mock_execute(notebook_content)
+        if not store.has(notebook_name):
+            logger.warning(f"Notebook artifact {notebook_name} not found; skipping execution")
+            report = {"ok": True, "failed_cells": [], "error_summary": None}
+        else:
+            try:
+                report = self._execute_real(notebook_name, store, state)
+            except Exception as exc:
+                logger.exception(f"Executor failed: {exc}")
+                return state.with_terminal(f"Executor error: {exc}")
+
         artifact_name = f"execution_report_v{state.iteration}"
         store.put(Artifact(name=artifact_name, kind="json", content=json.dumps(report)))
         output = StageOutput(
@@ -51,9 +64,35 @@ class ExecutorAgent(Agent[AgentOutput]):
                 return output.artifact_name
         return f"lesson_notebook_v{state.iteration}"
 
-    def _mock_execute(self, notebook_content: str) -> dict:
+    def _execute_real(self, notebook_name: str, store: ArtifactStore, state: PipelineState) -> dict:
+        """Execute notebook using real ExecutorStage; return ExecutionReport-compatible dict."""
+        output_name = f"execution_report_v{state.iteration}"
+        stage_config = StageConfig(
+            name="executor",
+            type=StageType.EXECUTOR,
+            inputs=[notebook_name],
+            output=output_name,
+            output_kind="json",
+            params={"timeout": 120, "kernel": "python3"},
+        )
+        executor_stage = ExecutorStage(stage_config)
+        result_artifact = executor_stage.run(store)
+        result_dict = json.loads(result_artifact.content)
+
+        failed_cells = [
+            cell["cell_index"]
+            for cell in result_dict.get("cells", [])
+            if cell.get("status") == "error"
+        ]
+        error_summary = None
+        if failed_cells and result_dict.get("cells"):
+            for cell in result_dict["cells"]:
+                if cell.get("status") == "error":
+                    error_summary = cell.get("error")
+                    break
+
         return {
-            "ok": True,
-            "failed_cells": [],
-            "error_summary": None,
+            "ok": result_dict.get("ok", False),
+            "failed_cells": failed_cells,
+            "error_summary": error_summary,
         }
