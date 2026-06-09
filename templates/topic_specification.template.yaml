@@ -1,0 +1,66 @@
+# Topic Specification Template
+# =============================
+# Define the scope, depth, and boundaries of what should be learned.
+# All fields optional; omit any that don't apply.
+#
+# Usage: forged build --topic "..." --topic-spec path/to/topic.yaml
+
+scope:
+  # What is the focused topic/area?
+  # Examples:
+  # - "Hash maps: implementation, complexity analysis, trade-offs"
+  # - "LLM inference optimization: quantization, batching, caching"
+  # - "Kubernetes networking: Service types, Ingress, CNI plugins"
+  title: ""
+
+  # What is explicitly OUT of scope?
+  # Examples:
+  # - "Skip distributed hash tables; focus on in-memory"
+  # - "Assume LLM fundamentals known; focus on deployment"
+  exclusions: []
+
+learning_objectives:
+  # What should the learner be able to do/understand by the end?
+  # Format: "verb + object" (e.g., "understand", "implement", "debug", "optimize")
+  # Examples:
+  # - "Implement a hash map from scratch in Python"
+  # - "Explain open vs closed addressing trade-offs"
+  # - "Optimize inference latency in LLM serving"
+  outcomes:
+    - ""
+
+prerequisites:
+  # What knowledge is assumed?
+  # Examples:
+  # - "Basic Python syntax and control flow"
+  # - "Familiar with Big-O notation"
+  # - "Understanding of neural networks"
+  required_knowledge:
+    - ""
+
+constraints:
+  # Any constraints on the notebook/project?
+  # Examples:
+  # - "Must run in <5 minutes on modest hardware"
+  # - "Suitable for cloud-based environment (Colab/Jupyter)"
+  # - "No external API calls allowed"
+  time_limit_minutes: null
+  environment: ""
+
+depth:
+  # How deep should the material go?
+  # Options: surface (overview), practical (hands-on), rigorous (theoretical)
+  # Examples:
+  # - "practical" → Implement and use; understand key trade-offs
+  # - "rigorous" → Understand proofs, complexity analysis, edge cases
+  # - "surface" → Know what it is; don't need to implement
+  level: "practical"
+
+focus_areas:
+  # What aspects should be emphasized?
+  # Examples:
+  # - "performance optimization"
+  # - "correctness and testing"
+  # - "real-world applications"
+  emphases:
+    - ""

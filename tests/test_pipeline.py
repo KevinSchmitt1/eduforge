@@ -16,10 +16,10 @@ from pathlib import Path
 
 import pytest
 
-from eduforge.artifacts import Artifact, ArtifactStore
-from eduforge.config import PipelineConfig, StageType, load_pipeline
-from eduforge.executor import ExecutorStage
-from eduforge.notebook import build_notebook, cells_from_json, render_indexed
+from forged.artifacts import Artifact, ArtifactStore
+from forged.config import PipelineConfig, StageType, load_pipeline
+from forged.executor import ExecutorStage
+from forged.notebook import build_notebook, cells_from_json, render_indexed
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 
@@ -145,7 +145,7 @@ def _store_with_notebook(tmp_path: Path, sources: list[str]) -> ArtifactStore:
 
 
 def _executor_stage():
-    from eduforge.config import StageConfig
+    from forged.config import StageConfig
 
     return StageConfig(
         name="executor", type="executor", inputs=["notebook"],
@@ -189,8 +189,8 @@ def test_finalize_keeps_only_named_files(tmp_path):
 
 
 def test_build_summary_reports_execution_and_narrative(tmp_path):
-    from eduforge.config import PipelineConfig
-    from eduforge.report import build_summary
+    from forged.config import PipelineConfig
+    from forged.report import build_summary
 
     pipeline = PipelineConfig.model_validate(
         {
@@ -237,7 +237,7 @@ def _make_runs(tmp_path, stamps):
 
 
 def test_clean_keeps_newest_runs(tmp_path):
-    from eduforge.cli import _cmd_clean
+    from forged.cli import _cmd_clean
 
     runs = _make_runs(tmp_path, ["20260101-000000_x", "20260102-000000_x", "20260103-000000_x"])
 
@@ -248,7 +248,7 @@ def test_clean_keeps_newest_runs(tmp_path):
 
 
 def test_clean_dry_run_deletes_nothing(tmp_path):
-    from eduforge.cli import _cmd_clean
+    from forged.cli import _cmd_clean
 
     runs = _make_runs(tmp_path, ["20260101-000000_x", "20260102-000000_x", "20260103-000000_x"])
 
@@ -259,7 +259,7 @@ def test_clean_dry_run_deletes_nothing(tmp_path):
 
 
 def test_clean_rejects_negative_keep(tmp_path):
-    from eduforge.cli import _cmd_clean
+    from forged.cli import _cmd_clean
 
     runs = _make_runs(tmp_path, ["20260101-000000_x"])
 
@@ -273,7 +273,7 @@ def test_clean_refuses_without_confirmation_when_not_a_tty(tmp_path, monkeypatch
     # No --yes and stdin is not interactive → refuse rather than wipe runs blindly.
     import sys
 
-    from eduforge.cli import _cmd_clean
+    from forged.cli import _cmd_clean
 
     runs = _make_runs(tmp_path, ["20260101-000000_x", "20260102-000000_x"])
     monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
@@ -292,8 +292,8 @@ def test_clean_refuses_without_confirmation_when_not_a_tty(tmp_path, monkeypatch
 # keeps the BEST version: prefer no crucial issue, then higher quality, then earliest
 # — so a revision is adopted only when it genuinely improves the lesson.
 
-from eduforge.executor import executed_notebook_filename  # noqa: E402
-from eduforge.gate import evaluate_candidates, notebook_candidates  # noqa: E402
+from forged.executor import executed_notebook_filename  # noqa: E402
+from forged.gate import evaluate_candidates, notebook_candidates  # noqa: E402
 
 
 def _review_loop_pipeline() -> PipelineConfig:
@@ -569,7 +569,7 @@ def test_gate_single_candidate_passes_through(tmp_path):
 def test_orchestrator_delivers_the_accepted_notebook(tmp_path):
     # End-to-end of finalize: a failing revision must not become lesson.ipynb,
     # and the manifest must record the gate decision.
-    from eduforge.orchestrator import Orchestrator
+    from forged.orchestrator import Orchestrator
 
     store = ArtifactStore(tmp_path)
     _populate_review_loop(store, orig_ok=True, orig_fb=CLEAN_FEEDBACK,
@@ -595,7 +595,7 @@ def test_orchestrator_delivers_the_accepted_notebook(tmp_path):
 
 
 def test_orchestrator_runs_revision_loop_until_good_enough(tmp_path):
-    from eduforge.orchestrator import Orchestrator
+    from forged.orchestrator import Orchestrator
 
     pipeline = load_pipeline(CONFIG_DIR / "pipeline.review-loop.yaml")
     runner = _scripted_runner_factory(
@@ -659,7 +659,7 @@ def _script_iterations(*, baseline_student, baseline_review, per_iter_student,
 
 
 def test_orchestrator_hard_fails_when_crucial_issues_remain(tmp_path):
-    from eduforge.orchestrator import Orchestrator
+    from forged.orchestrator import Orchestrator
 
     pipeline = load_pipeline(CONFIG_DIR / "pipeline.review-loop.yaml")
     # Every iteration keeps the same BLOCKER → loop spends its full budget, then hard-fails.
@@ -694,7 +694,7 @@ def test_revision_loop_uses_full_budget_on_a_persistent_stall(tmp_path):
     # P1: with require_progress, a quality tie no longer aborts the loop after one round.
     # Every version sits at 85 (3 CONFUSING) — below the bar, never crucial — so the loop
     # should run all max_iterations rounds before shipping the least-bad version.
-    from eduforge.orchestrator import Orchestrator
+    from forged.orchestrator import Orchestrator
 
     pipeline = load_pipeline(CONFIG_DIR / "pipeline.review-loop.yaml")
     max_iter = pipeline.revision.max_iterations
@@ -723,8 +723,8 @@ def test_revision_loop_uses_full_budget_on_a_persistent_stall(tmp_path):
 
 def test_summary_surfaces_quality_and_residual_issues(tmp_path):
     # Minor leftovers must be listed for the human, never silently buried.
-    from eduforge.gate import evaluate_candidates as _eval
-    from eduforge.report import build_summary
+    from forged.gate import evaluate_candidates as _eval
+    from forged.report import build_summary
 
     store = ArtifactStore(tmp_path)
     _put_notebook(store, "notebook", "v = 1")
@@ -742,7 +742,7 @@ def test_summary_surfaces_quality_and_residual_issues(tmp_path):
 
 # ── Ledger (findings parsing + graded quality score) ─────────────────────────
 
-from eduforge.ledger import (  # noqa: E402
+from forged.ledger import (  # noqa: E402
     burden,
     has_blocker,
     parse_findings,
@@ -760,6 +760,39 @@ def test_parse_findings_ignores_prose_and_verdict_lines():
     # "no blockers" in prose must NOT register as a finding.
     feedback = "Overall this reads well, no blockers at all.\nVerdict: yes."
     assert parse_findings(feedback) == ()
+
+
+def test_parse_findings_reads_structured_json_block():
+        feedback = """Narrative summary here.
+
+```json
+{
+    "quality_score": 75,
+    "blockers": [],
+    "findings": [
+        {
+            "source": "student",
+            "severity": "CONFUSING",
+            "scope": "cell",
+            "location": {"type": "cell", "cell_index": 4, "label": null},
+            "text": "Hash table explanation is too thin."
+        },
+        {
+            "source": "student",
+            "severity": "NITPICK",
+            "scope": "notebook",
+            "location": {"type": "notebook", "cell_index": null, "label": null},
+            "text": "Needs a stronger capstone example."
+        }
+    ]
+}
+```
+"""
+        findings = parse_findings(feedback)
+        assert [(f.severity, f.cell, f.text) for f in findings] == [
+                ("CONFUSING", 4, "Hash table explanation is too thin."),
+                ("NITPICK", None, "Needs a stronger capstone example."),
+        ]
 
 
 def test_quality_score_drops_with_severity_weight():
@@ -783,7 +816,7 @@ def test_has_blocker_detects_only_blocker_severity():
 # ── Revision stages (P5: reviser anchored to the brief) ──────────────────────
 
 def test_reviser_stage_receives_the_brief_as_input():
-    from eduforge.orchestrator import Orchestrator
+    from forged.orchestrator import Orchestrator
 
     pipeline = load_pipeline(CONFIG_DIR / "pipeline.review-loop.yaml")
     orch = Orchestrator(pipeline, Path("personas"), Path("runs"))
@@ -799,7 +832,7 @@ def test_reviser_stage_receives_the_brief_as_input():
 # ── CLI boundaries (#2 bad config, #3 empty topic, #4 honest exit code) ──────
 
 def test_cli_rejects_empty_topic_without_running(capsys):
-    from eduforge.cli import main
+    from forged.cli import main
 
     rc = main(["build", "--topic", "   ", "--config", str(CONFIG_DIR / "pipeline.skeleton.yaml")])
 
@@ -808,7 +841,7 @@ def test_cli_rejects_empty_topic_without_running(capsys):
 
 
 def test_cli_reports_clean_error_for_missing_config(capsys, tmp_path):
-    from eduforge.cli import main
+    from forged.cli import main
 
     rc = main(["build", "--topic", "Hashing", "--config", str(tmp_path / "nope.yaml")])
 
@@ -826,7 +859,7 @@ def _write_manifest_with_gate(store, gate: dict) -> None:
 
 def test_cli_exits_nonzero_when_crucial_issue_is_open(tmp_path):
     # #4: a notebook the gate marks crucial-open must NOT report success.
-    from eduforge.cli import _report_outcome
+    from forged.cli import _report_outcome
 
     store = ArtifactStore(tmp_path)
     _write_manifest_with_gate(store, {"crucial_open": True, "satisfied": False})
@@ -835,7 +868,7 @@ def test_cli_exits_nonzero_when_crucial_issue_is_open(tmp_path):
 
 
 def test_cli_warns_but_succeeds_below_quality_bar(tmp_path):
-    from eduforge.cli import _report_outcome
+    from forged.cli import _report_outcome
 
     store = ArtifactStore(tmp_path)
     _write_manifest_with_gate(store, {"crucial_open": False, "satisfied": False})
@@ -844,7 +877,7 @@ def test_cli_warns_but_succeeds_below_quality_bar(tmp_path):
 
 
 def test_cli_reports_clean_success(tmp_path):
-    from eduforge.cli import _report_outcome
+    from forged.cli import _report_outcome
 
     store = ArtifactStore(tmp_path)
     _write_manifest_with_gate(store, {"crucial_open": False, "satisfied": True})
@@ -853,7 +886,7 @@ def test_cli_reports_clean_success(tmp_path):
 
 
 def test_pipelines_command_lists_bundled_configs(capsys):
-    from eduforge.cli import main
+    from forged.cli import main
 
     rc = main(["pipelines"])
 
@@ -866,8 +899,8 @@ def test_pipelines_command_lists_bundled_configs(capsys):
 # ── LLM client connection wiring (no network) ────────────────────────────────
 
 def test_connection_kwargs_for_ollama_uses_placeholder_key(monkeypatch):
-    from eduforge.config import Provider
-    from eduforge.llm import DEFAULT_OLLAMA_BASE_URL, OLLAMA_PLACEHOLDER_KEY, _connection_kwargs
+    from forged.config import Provider
+    from forged.llm import DEFAULT_OLLAMA_BASE_URL, OLLAMA_PLACEHOLDER_KEY, _connection_kwargs
 
     monkeypatch.delenv("OLLAMA_BASE_URL", raising=False)
     kwargs = _connection_kwargs(Provider.OLLAMA)
@@ -876,16 +909,16 @@ def test_connection_kwargs_for_ollama_uses_placeholder_key(monkeypatch):
 
 
 def test_connection_kwargs_for_ollama_honours_env_base_url(monkeypatch):
-    from eduforge.config import Provider
-    from eduforge.llm import _connection_kwargs
+    from forged.config import Provider
+    from forged.llm import _connection_kwargs
 
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://example.test:9999/v1")
     assert _connection_kwargs(Provider.OLLAMA)["base_url"] == "http://example.test:9999/v1"
 
 
 def test_connection_kwargs_for_openai_requires_a_key(monkeypatch):
-    from eduforge.config import Provider
-    from eduforge.llm import _connection_kwargs
+    from forged.config import Provider
+    from forged.llm import _connection_kwargs
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
@@ -893,8 +926,8 @@ def test_connection_kwargs_for_openai_requires_a_key(monkeypatch):
 
 
 def test_connection_kwargs_for_openai_passes_key_through(monkeypatch):
-    from eduforge.config import Provider
-    from eduforge.llm import _connection_kwargs
+    from forged.config import Provider
+    from forged.llm import _connection_kwargs
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-123")
     assert _connection_kwargs(Provider.OPENAI) == {"api_key": "sk-test-123"}
@@ -903,7 +936,7 @@ def test_connection_kwargs_for_openai_passes_key_through(monkeypatch):
 # ── Executor: input contract + in-process fallback ───────────────────────────
 
 def test_executor_rejects_more_than_one_input(tmp_path):
-    from eduforge.config import StageConfig
+    from forged.config import StageConfig
 
     store = _store_with_notebook(tmp_path, ["x = 1"])
     stage = StageConfig(
@@ -946,7 +979,7 @@ class _FakeTTY(io.StringIO):
 
 
 def test_spinner_is_inactive_when_stream_is_not_a_tty():
-    from eduforge.progress import Spinner
+    from forged.progress import Spinner
 
     stream = io.StringIO()  # StringIO.isatty() is False
     spinner = Spinner("planner", stream=stream).start()
@@ -959,7 +992,7 @@ def test_spinner_is_inactive_when_stream_is_not_a_tty():
 def test_spinner_animates_then_clears_on_a_tty():
     import time
 
-    from eduforge.progress import FRAME_INTERVAL_SECONDS, SPINNER_FRAMES, Spinner
+    from forged.progress import FRAME_INTERVAL_SECONDS, SPINNER_FRAMES, Spinner
 
     stream = _FakeTTY()
     with Spinner("planner", stream=stream):
@@ -975,7 +1008,7 @@ def test_spinner_animates_then_clears_on_a_tty():
 def _ollama_agent(persona_dir: Path, *, output_kind: str):
     """An LLMAgent whose client targets Ollama, so construction needs no API key
     and no network call (the OpenAI SDK only connects on an actual request)."""
-    from eduforge.agent import LLMAgent
+    from forged.agent import LLMAgent
 
     pipeline = PipelineConfig.model_validate({
         "name": "t",
@@ -1029,8 +1062,8 @@ def _llm_client_with_fake(create):
     provider lets the real client construct without a key; we then swap the transport."""
     from types import SimpleNamespace
 
-    from eduforge.config import ModelConfig, Provider
-    from eduforge.llm import LLMClient
+    from forged.config import ModelConfig, Provider
+    from forged.llm import LLMClient
 
     client = LLMClient(ModelConfig(provider=Provider.OLLAMA))
     client._client = SimpleNamespace(
@@ -1093,7 +1126,7 @@ def test_agent_run_writes_processed_output_to_store(tmp_path):
 # ── CLI helpers (header, profile loading, stage reporter, .env) ───────────────
 
 def test_build_header_advertises_revision_rounds():
-    from eduforge.cli import _build_header
+    from forged.cli import _build_header
 
     pipeline = load_pipeline(CONFIG_DIR / "pipeline.review-loop.yaml")
     header = _build_header(pipeline, "learner.md")
@@ -1104,14 +1137,14 @@ def test_build_header_advertises_revision_rounds():
 
 
 def test_build_header_for_a_linear_pipeline_counts_stages():
-    from eduforge.cli import _build_header
+    from forged.cli import _build_header
 
     pipeline = load_pipeline(CONFIG_DIR / "pipeline.skeleton.yaml")
     assert "stage(s)" in _build_header(pipeline, "default.md")
 
 
 def test_read_profile_returns_contents(tmp_path):
-    from eduforge.cli import _read_profile
+    from forged.cli import _read_profile
 
     profile = tmp_path / "p.md"
     profile.write_text("a web-dev beginner", encoding="utf-8")
@@ -1119,14 +1152,14 @@ def test_read_profile_returns_contents(tmp_path):
 
 
 def test_read_profile_raises_for_missing_file(tmp_path):
-    from eduforge.cli import _read_profile
+    from forged.cli import _read_profile
 
     with pytest.raises(FileNotFoundError, match="Learner profile not found"):
         _read_profile(tmp_path / "missing.md")
 
 
 def test_stage_reporter_prints_done_and_error_lines(capsys):
-    from eduforge.cli import _StageReporter
+    from forged.cli import _StageReporter
 
     reporter = _StageReporter()
     reporter("planner", "start", "llm")   # spinner inactive under captured (non-TTY) stdout
@@ -1139,7 +1172,7 @@ def test_stage_reporter_prints_done_and_error_lines(capsys):
 
 
 def test_load_dotenv_sets_only_absent_keys(tmp_path, monkeypatch):
-    from eduforge.cli import _load_dotenv
+    from forged.cli import _load_dotenv
 
     env_file = tmp_path / ".env"
     env_file.write_text('NEW_KEY="from-file"\nEXISTING=should-not-win\n', encoding="utf-8")

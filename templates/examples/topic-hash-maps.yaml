@@ -1,0 +1,30 @@
+# Example: Hash Maps / Hash Tables
+# =================================
+# Topic specification for learning hash map fundamentals
+
+title: "Hash Maps: Implementation, Complexity, and Trade-offs"
+
+scope: "implementation"
+
+learning_objectives:
+  - "Implement a hash map (hash table) from scratch in Python"
+  - "Explain why hash maps have O(1) average case complexity"
+  - "Understand the trade-offs between open addressing and chaining"
+  - "Identify and fix hash collisions in practice"
+  - "Know when to use hash maps vs other data structures"
+  - "Estimate memory usage and load factor impact"
+
+prerequisites:
+  - "Python syntax and data structures (lists, arrays)"
+  - "Basic Big-O notation (O(1), O(n), O(n²))"
+  - "Concept of a hash function (what it does, not how to build one)"
+  - "Basic modular arithmetic (%)"
+
+constraints: "120-minute session; any Python environment"
+
+depth: "intermediate"
+
+focus_areas:
+  - "Implementation clarity over optimization"
+  - "Hands-on coding of collisions and resizing"
+  - "Real-world performance implications"

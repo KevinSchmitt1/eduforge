@@ -17,6 +17,7 @@ to the reviser, which is shown the full running history (see the orchestrator).
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 
@@ -117,7 +118,11 @@ class IssueLedger:
 
 
 def parse_findings(feedback: str) -> tuple[Finding, ...]:
-    """Extract findings from a critic's free-text feedback, in order."""
+    """Extract findings from either a structured JSON block or free-text lines."""
+    structured = _parse_structured_findings(feedback)
+    if structured is not None:
+        return structured
+
     findings: list[Finding] = []
     for line in feedback.splitlines():
         match = _FINDING_LINE.match(line)
@@ -132,6 +137,51 @@ def parse_findings(feedback: str) -> tuple[Finding, ...]:
             )
         )
     return tuple(findings)
+
+
+def _parse_structured_findings(feedback: str) -> tuple[Finding, ...] | None:
+    """Read the final JSON grading block emitted by the student prompt when present."""
+    candidate = _extract_json_object(feedback)
+    if candidate is None:
+        return None
+
+    try:
+        parsed = json.loads(candidate)
+    except json.JSONDecodeError:
+        return None
+
+    raw_findings = parsed.get("findings") if isinstance(parsed, dict) else None
+    if not isinstance(raw_findings, list):
+        return None
+
+    findings: list[Finding] = []
+    for raw in raw_findings:
+        if not isinstance(raw, dict):
+            continue
+        severity = str(raw.get("severity", "")).upper()
+        if severity not in SEVERITY_WEIGHTS:
+            continue
+        location = raw.get("location") if isinstance(raw.get("location"), dict) else {}
+        cell_index = location.get("cell_index")
+        findings.append(
+            Finding(
+                severity=severity,
+                cell=cell_index if isinstance(cell_index, int) else None,
+                text=str(raw.get("text", "")).strip() or str(raw).strip(),
+            )
+        )
+    return tuple(findings)
+
+
+def _extract_json_object(feedback: str) -> str | None:
+    fenced = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", feedback, re.DOTALL)
+    if fenced:
+        return fenced[-1]
+
+    stripped = feedback.strip()
+    if stripped.startswith("{") and stripped.endswith("}"):
+        return stripped
+    return None
 
 
 def burden(findings: tuple[Finding, ...]) -> int:

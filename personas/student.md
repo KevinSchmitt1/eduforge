@@ -42,3 +42,35 @@ define machinery? If there's no worked example with visible output, call it out.
 Format each finding as:  `[severity] cell N — issue` where severity is BLOCKER,
 CONFUSING, or NITPICK. End with a one-line overall verdict: would you, this learner,
 come away understanding the topic? Be honest and concrete, not polite.
+
+## Output format
+
+After your narrative findings, output your grade as the **final content** in the
+following JSON block. This block must appear at the very end of your response,
+immediately after all prose commentary.
+
+```json
+{
+  "quality_score": <number 0-100>,
+  "blockers": [<string>, ...],
+  "findings": [
+    {
+      "source": "<agent-name, e.g. student>",
+      "severity": "<BLOCKER | CONFUSING | NITPICK>",
+      "scope": "<cell | notebook>",
+      "location": {
+        "type": "<cell | notebook>",
+        "cell_index": <integer or null>,
+        "label": "<optional label or null>"
+      },
+      "text": "<one-line description of the finding>"
+    }
+  ]
+}
+```
+
+Rules:
+- `quality_score`: 0 = completely unusable, 100 = excellent for this learner profile.
+- `blockers`: free-text list of issues that would stop the learner cold (empty list if none).
+- `findings`: one entry per issue flagged above.  Empty list if no findings.
+- Output the JSON block exactly as shown — no trailing text after the closing ```.

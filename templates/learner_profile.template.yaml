@@ -1,0 +1,48 @@
+# Learner Profile Template
+# ========================
+# Describe the learner's background, goals, and preferences.
+# All fields optional; omit any that don't apply.
+#
+# Usage: forged build --topic "..." --learner-profile path/to/profile.yaml
+
+prior_knowledge:
+  # What does this learner already know?
+  # Examples:
+  # - "Familiar with Python, unfamiliar with systems programming"
+  # - "Data science background; new to ML engineering"
+  # - "Complete beginner in programming"
+  description: ""
+
+learning_style:
+  # How does this learner prefer to learn?
+  # Common options: visual, hands-on, conceptual, example-driven, problem-solving
+  # Examples:
+  # - "Hands-on: loves writing code and experimenting"
+  # - "Conceptual: wants deep understanding of theory first"
+  # - "Visual: prefers diagrams and mental models"
+  preference: ""
+
+environment:
+  # Where and how will this learner engage with the material?
+  # Examples:
+  # - "Self-paced, can dedicate 5-10 hours/week"
+  # - "Intensive bootcamp, 8 hours/day for 2 weeks"
+  # - "Commute study, 30-minute sessions"
+  context: ""
+
+material_density:
+  # How much explanation detail is needed?
+  # Options: dense (lots of detail), medium (balanced), minimal (concise)
+  # Examples:
+  # - "dense" → detailed explanations, multiple examples per concept
+  # - "medium" → focused explanations, 1-2 examples per concept
+  # - "minimal" → brief explanations, code-first approach
+  level: "medium"
+
+background_context:
+  # Any other relevant context?
+  # Examples:
+  # - "Industry: backend infrastructure; goal is to learn LLM application deployment"
+  # - "Career transition: switching from ops to SRE; strong linux knowledge"
+  # - "Motivated by: building a personal project (chatbot)"
+  notes: ""

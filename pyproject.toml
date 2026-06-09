@@ -3,13 +3,13 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "eduforge"
+name = "forged"
 version = "0.1.0"
 description = "A multi-agent CLI that builds and self-checks IT learning notebooks"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-authors = [{ name = "eduforge contributors" }]
+authors = [{ name = "forged contributors" }]
 keywords = ["education", "notebooks", "agents", "llm", "jupyter"]
 
 dependencies = [
@@ -19,6 +19,7 @@ dependencies = [
     "nbformat>=5.10.0",    # assemble .ipynb
     "nbclient>=0.10.0",    # execute notebooks (the anti-bug layer)
     "ipykernel>=6.29.0",   # kernel for execution
+    "langgraph>=1.0.0",    # LangGraph for agentic pipeline orchestration
 ]
 
 [project.optional-dependencies]
@@ -31,13 +32,17 @@ dev = [
 ]
 
 [project.scripts]
-eduforge = "eduforge.cli:main"
+forged = "forged.cli:main"
 
 [tool.setuptools]
-packages = ["eduforge"]
+packages = ["forged", "forged.pipeline", "forged.pipeline.agents"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "unit: fast, isolated unit tests (no I/O, no LLM)",
+    "integration: tests that integrate multiple modules",
+]
 
 [tool.ruff]
 line-length = 100
@@ -50,5 +55,5 @@ select = ["E", "F", "I", "UP", "B", "C4", "SIM"]
 
 [tool.mypy]
 python_version = "3.10"
-files = ["eduforge"]
+files = ["forged"]
 warn_unused_ignores = true

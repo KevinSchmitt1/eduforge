@@ -12,8 +12,10 @@ enough, progress stalls, or the iteration budget is exhausted.
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable
+from dataclasses import asdict
 from pathlib import Path
 
 from .agent import LLMAgent
@@ -22,7 +24,55 @@ from .config import PipelineConfig, RevisionPolicy, StageConfig, StageType
 from .executor import ExecutorStage, executed_notebook_filename
 from .gate import CandidateResult, GateDecision, evaluate_candidates
 from .ledger import IssueLedger, parse_findings
+from .models import AssessmentApproach, LearnerProfile, TopicSpecification
 from .report import build_summary
+
+
+def _default_learner_profile() -> LearnerProfile:
+    """Fallback profile used by legacy callers that only pass a profile label."""
+    return LearnerProfile(
+        name="Default Learner",
+        description="Self-study for professional development",
+        prior_knowledge=["Basic understanding of the topic"],
+        environment="jupyter_notebook",
+        material_density="standard",
+        learning_style="hands_on",
+        background_context="Self-directed learning; prefers practical examples",
+    )
+
+
+def _default_topic_spec(brief: str) -> TopicSpecification:
+    """Fallback topic specification used by legacy callers."""
+    return TopicSpecification(
+        title=brief,
+        scope="fundamentals",
+        learning_objectives=[f"Explain the core ideas behind: {brief}"],
+        prerequisites=["Basic Python literacy"],
+        constraints="Keep the lesson practical and runnable in a notebook.",
+        depth="beginner",
+        focus_areas=[brief],
+    )
+
+
+def _render_profile_artifact(profile: LearnerProfile) -> str:
+    """Preserve the legacy `profile` seed artifact expected by pipeline YAML."""
+    return "\n".join(
+        [
+            f"# {profile.name}",
+            "",
+            profile.description,
+            "",
+            "## Prior Knowledge",
+            *[f"- {item}" for item in profile.prior_knowledge],
+            "",
+            f"Environment: {profile.environment}",
+            f"Material Density: {profile.material_density}",
+            f"Learning Style: {profile.learning_style}",
+            "",
+            "## Background Context",
+            profile.background_context,
+        ]
+    )
 
 # Files a successful run keeps; everything else is pruned as intermediate plumbing.
 DELIVERABLE_NOTEBOOK = "lesson.ipynb"
@@ -58,23 +108,65 @@ class Orchestrator:
     def run(
         self,
         brief: str,
-        profile: str,
-        profile_label: str = "profile",
+        learner_profile: LearnerProfile | str,
+        topic_spec: TopicSpecification | None = None,
+        assessment_approach: AssessmentApproach | None = None,
+        profile_label: str | None = None,
         on_stage=None,
     ) -> ArtifactStore:
         """Execute every stage and return the populated store.
 
-        `brief` is the lesson topic; `profile` is the target learner's prior
-        knowledge + environment. Both are seeded before any stage runs.
-        `on_stage` is an optional callback (stage_name, status, detail) for
-        progress reporting — the CLI uses it to stream a live status line.
+        Args:
+            brief: Original topic string (e.g., "How hash maps work")
+            learner_profile: LearnerProfile object, or a legacy profile label/path
+            topic_spec: TopicSpecification object
+            assessment_approach: Optional AssessmentApproach object
+            profile_label: Optional legacy label shown in the summary
+            on_stage: Progress callback
         """
+        if not isinstance(learner_profile, LearnerProfile):
+            profile_label = profile_label or str(learner_profile)
+            learner_profile = _default_learner_profile()
+        if topic_spec is None:
+            topic_spec = _default_topic_spec(brief)
+
         store = ArtifactStore.create(self._runs_root, self._pipeline.name)
         self._last_run_dir = store.run_dir
         self._timings = {}
-        store.put(Artifact(name="brief", kind="text", content=brief))
-        store.put(Artifact(name="profile", kind="text", content=profile))
 
+        # Seed store with all input context (for agents and assessor to reference)
+        store.put(Artifact(name="brief", kind="text", content=brief))
+        store.put(Artifact(
+            name="profile",
+            kind="text",
+            content=_render_profile_artifact(learner_profile),
+        ))
+        store.put(Artifact(
+            name="learner_profile",
+            kind="json",
+            content=json.dumps(asdict(learner_profile)),
+        ))
+        store.put(Artifact(
+            name="topic_spec",
+            kind="json",
+            content=json.dumps(asdict(topic_spec)),
+        ))
+        if assessment_approach:
+            store.put(Artifact(
+                name="assessment_approach",
+                kind="json",
+                content=json.dumps(asdict(assessment_approach)),
+            ))
+
+        # Build context dict for agents
+        context = {
+            "learner_profile": learner_profile,
+            "topic_spec": topic_spec,
+            "assessment_approach": assessment_approach,
+            "brief": brief,
+        }
+
+        # Run pipeline stages with context
         for stage in self._pipeline.stages:
             _run_stage(
                 stage,
@@ -83,13 +175,14 @@ class Orchestrator:
                 self._pipeline.name,
                 on_stage,
                 self._timings,
+                context=context,
             )
 
         runtime_pipeline = self._pipeline
         if self._pipeline.revision is not None:
             runtime_pipeline = self._revise_loop(store, on_stage)
 
-        self._finalize(store, brief, profile_label, runtime_pipeline)
+        self._finalize(store, brief, profile_label or learner_profile.name, runtime_pipeline)
         return store
 
     def _finalize(
@@ -292,12 +385,17 @@ def _run_stage(
     pipeline_name: str,
     on_stage,
     timings: dict[str, float] | None = None,
+    context: dict | None = None,
 ) -> None:
     _notify(on_stage, stage.name, "start", stage.type.value)
     started = time.perf_counter()
     try:
         runner = runner_factory(stage)
-        artifact = runner.run(store)
+        # Pass context to LLMAgent if available
+        if isinstance(runner, LLMAgent) and context:
+            artifact = runner.run(store, context=context)
+        else:
+            artifact = runner.run(store)
     except Exception as exc:  # noqa: BLE001 — record, then halt the run
         _notify(on_stage, stage.name, "error", str(exc))
         store.write_manifest(

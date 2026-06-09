@@ -1,0 +1,26 @@
+# Example: Complete Beginner
+# ==========================
+# Learner profile for someone new to programming learning a foundational topic
+
+name: "Career Changer - Bootcamp Learner"
+
+description: |
+  No programming experience. Career changer from project management.
+  Intensive bootcamp environment with high motivation and peer support.
+
+prior_knowledge:
+  - "Basic math (algebra, functions)"
+  - "General computer literacy"
+  - "Problem-solving mindset"
+
+environment: "jupyter_notebook"
+
+material_density: "dense"
+
+learning_style: "visual"
+
+background_context: |
+  Career changer: background in project management.
+  Highly motivated; excited to learn programming.
+  Goal: Complete bootcamp and land first dev role.
+  Learning 8-10 hours/day in group environment with peer support.

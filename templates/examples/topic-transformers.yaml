@@ -1,0 +1,32 @@
+# Example: Transformers in LLMs
+# =============================
+# Topic specification for learning transformer architecture in language models
+
+title: "Transformer Architecture: Attention and Decoding in LLMs"
+
+scope: "implementation"
+
+learning_objectives:
+  - "Understand the transformer architecture at a high level"
+  - "Implement a minimal transformer attention head from scratch"
+  - "Explain self-attention, multi-head attention, and masking"
+  - "Understand token generation strategies (greedy, beam search, sampling)"
+  - "Know why transformers are efficient compared to RNNs"
+  - "Implement a simple language model with transformers"
+
+prerequisites:
+  - "Linear algebra basics (matrix multiplication, dot product)"
+  - "Python and PyTorch (or equivalent deep learning framework)"
+  - "Basic neural network concepts (layers, backprop, training)"
+  - "Understanding of word embeddings"
+  - "Familiarity with probability (softmax, sampling)"
+
+constraints: "180-minute session; GPU preferred but CPU acceptable"
+
+depth: "advanced"
+
+focus_areas:
+  - "Mathematical intuition behind attention"
+  - "From-scratch implementation to build understanding"
+  - "Connection between theory and modern LLM applications"
+  - "Performance implications and optimization opportunities"

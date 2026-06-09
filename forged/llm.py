@@ -30,12 +30,11 @@ class LLMClient:
 
     def __init__(self, config: ModelConfig):
         self._config = config
-        if OpenAI is None:
-            raise RuntimeError(
-                "The openai package is not installed. Install it to run LLM-backed "
-                "stages, or switch the pipeline to a local/non-LLM path."
-            )
-        self._client = OpenAI(**_connection_kwargs(config.provider))
+        self._client = (
+            OpenAI(**_connection_kwargs(config.provider))
+            if OpenAI is not None
+            else None
+        )
 
     def complete(self, system_prompt: str, user_prompt: str) -> str:
         """Run a single system+user chat completion and return the text.
@@ -43,6 +42,11 @@ class LLMClient:
         Raises RuntimeError with context on any API failure so the orchestrator
         can report which stage broke and why.
         """
+        if self._client is None:
+            raise RuntimeError(
+                "The openai package is not installed. Install it to run LLM-backed "
+                "stages, or switch the pipeline to a local/non-LLM path."
+            )
         try:
             response = self._client.chat.completions.create(
                 model=self._config.model,

@@ -1,8 +1,8 @@
-# eduforge
+# forgeducation
 
 **A multi-agent CLI that builds — and self-checks — IT learning notebooks.**
 
-eduforge turns a one-line topic into a runnable Jupyter notebook by passing it
+forgeducation turns a one-line topic into a runnable Jupyter notebook by passing it
 through a pipeline of role-specialised agents (planner → code author → executor →
 student → reviser …). Crucially, one stage **actually executes** the generated
 notebook and captures what every cell really does, so the explanations are checked
@@ -30,7 +30,7 @@ things the code doesn't actually do.
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e .            # editable install; adds the `eduforge` command
+pip install -e .            # editable install; adds the `forged` command
 cp .env.example .env        # then put your OPENAI_API_KEY in .env
 ```
 
@@ -38,18 +38,18 @@ cp .env.example .env        # then put your OPENAI_API_KEY in .env
 
 ```bash
 # Full pipeline (plan → author → run → student → revise → re-run → re-check)
-eduforge build --topic "How a Bloom filter works"
+forged build --topic "How a Bloom filter works"
 
 # Cheaper, shorter pipeline
-eduforge build --topic "How a Bloom filter works" \
+forged build --topic "How a Bloom filter works" \
     --config config/pipeline.skeleton.yaml
 
 # Target a specific learner
-eduforge build --topic "Recursion and the call stack" \
+forged build --topic "Recursion and the call stack" \
     --profile examples/profiles/web-dev-beginner.md
 
 # Discover the bundled pipelines (skeleton, review-loop)
-eduforge pipelines
+forged pipelines
 
 # Run fully local / private (start `ollama serve`, set provider: ollama in the YAML)
 ```
@@ -82,10 +82,38 @@ The CLI tells the truth about what it shipped, so it's safe to wrap in a script:
 Run directories are never auto-deleted, and `clean` never deletes without consent:
 
 ```bash
-eduforge clean --keep 10              # prompts: "Delete N run(s)? [y/N]"
-eduforge clean --keep 10 --dry-run    # preview what would be removed
-eduforge clean --keep 10 --yes        # skip the prompt (required non-interactively)
+forged clean --keep 10              # prompts: "Delete N run(s)? [y/N]"
+forged clean --keep 10 --dry-run    # preview what would be removed
+forged clean --keep 10 --yes        # skip the prompt (required non-interactively)
 ```
+
+### Execution paths
+
+There are two ways the pipeline can run:
+
+**Linear (primary, stable):** `forged build` runs every stage once in a fixed sequence —
+planner → code_author → executor → student → reviser. This is the path powering everything
+above.
+
+**Agentic (experimental):** `await forged.pipeline.run_pipeline(state, store)` is a
+LangGraph-based pipeline that classifies failures and reroutes to the appropriate agent
+rather than always running the full sequence. Phases 1–6 are complete (285 tests, 88%
+coverage, end-to-end validated with OpenAI). Known limitations: the executor is still
+mocked, the reviser routes but does not rewrite, and there is no CLI flag yet.
+
+For the full status, capabilities, limitations, and roadmap see
+[docs/architecture/07-agentic-pipeline-status.md](docs/architecture/07-agentic-pipeline-status.md).
+
+## Developing
+
+New contributors: start with [DEVELOPMENT.md](DEVELOPMENT.md). It explains:
+- The system architecture and data flow
+- The `docs/architecture/` guide (design docs for learner profiles, input flow, implementation)
+- Key concepts (profiles, topics, context threading)
+- How to add agents, modify profiles, or change the CLI
+- Project structure and file layout
+
+Users: skip this and jump to [Use](#use) above.
 
 ## How it fits together
 
@@ -102,16 +130,16 @@ what's already in hand. It only ever **keeps the best** version, never a regress
 
 | Module | Responsibility |
 |--------|----------------|
-| `eduforge/config.py` | Load + validate the pipeline YAML (dataflow checked) |
-| `eduforge/artifacts.py` | Immutable artifacts + reproducible run dirs + cleanup |
-| `eduforge/llm.py` | Pluggable OpenAI/Ollama client |
-| `eduforge/notebook.py` | Assemble `.ipynb` from JSON cells; index-label for agents |
-| `eduforge/agent.py` | `LLMAgent`: persona + inputs → one output artifact |
-| `eduforge/executor.py` | Run the notebook, capture per-cell errors (anti-bug) |
-| `eduforge/report.py` | Human-readable `SUMMARY.md` (timing, verdict, residuals) |
-| `eduforge/orchestrator.py` | Run + time stages, pass artifacts, finalize the run |
-| `eduforge/progress.py` | TTY-only elapsed-time spinner for long stages |
-| `eduforge/cli.py` | `eduforge build` / `pipelines` / `clean` |
+| `forged/config.py` | Load + validate the pipeline YAML (dataflow checked) |
+| `forged/artifacts.py` | Immutable artifacts + reproducible run dirs + cleanup |
+| `forged/llm.py` | Pluggable OpenAI/Ollama client |
+| `forged/notebook.py` | Assemble `.ipynb` from JSON cells; index-label for agents |
+| `forged/agent.py` | `LLMAgent`: persona + inputs → one output artifact |
+| `forged/executor.py` | Run the notebook, capture per-cell errors (anti-bug) |
+| `forged/report.py` | Human-readable `SUMMARY.md` (timing, verdict, residuals) |
+| `forged/orchestrator.py` | Run + time stages, pass artifacts, finalize the run |
+| `forged/progress.py` | TTY-only elapsed-time spinner for long stages |
+| `forged/cli.py` | `forged build` / `pipelines` / `clean` |
 
 Pipelines live in `config/`, agent system-prompts in `personas/`, learner profiles
 in `profiles/` (with more in `examples/profiles/`).
@@ -129,7 +157,7 @@ in `profiles/` (with more in `examples/profiles/`).
 ```bash
 pip install -e ".[dev]"
 pytest -q                        # offline: no API key needed
-pytest --cov=eduforge            # with coverage (~92%)
+pytest --cov=forged              # with coverage (~92%)
 ```
 
 Covers config validation, notebook assembly, cell indexing, the executor catching a
@@ -142,7 +170,7 @@ guards (confirm / `--yes` / `--dry-run`).
 Lint and type-check use the same `[dev]` extra:
 
 ```bash
-ruff check eduforge tests       # lint + import sorting
+ruff check forged tests         # lint + import sorting
 mypy                            # static type check (config in pyproject.toml)
 ```
 

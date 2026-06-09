@@ -1,0 +1,26 @@
+# Example: Backend Junior Developer
+# ==================================
+# Learner profile for a junior backend developer (2-3 years experience)
+# learning systems-level concepts
+
+name: "Backend Junior Developer"
+
+description: |
+  3 years of Python/Django web development experience.
+  Transitioning toward infrastructure and SRE roles.
+
+prior_knowledge:
+  - "Python and basic data structures (lists, dicts, sets)"
+  - "SQL and relational databases"
+  - "REST API design"
+
+environment: "jupyter_notebook"
+
+material_density: "standard"
+
+learning_style: "hands_on"
+
+background_context: |
+  Goal: Transition to backend infrastructure/SRE role.
+  Motivated by understanding how databases and caching work in production.
+  Works at a company with ~100 engineers; no big tech experience.

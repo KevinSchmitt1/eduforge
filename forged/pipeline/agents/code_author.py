@@ -1,0 +1,118 @@
+"""CodeAuthorAgent — produces notebook cells from a lesson plan.
+
+Persona: personas/code_author.md
+Input artifacts: lesson_plan_v{N}.md  (reads latest from outputs)
+Output artifact: lesson_notebook_v{iteration}.ipynb  (kind=notebook — JSON cells)
+Next stage: EXECUTOR
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+from pathlib import Path
+
+from forged.artifacts import Artifact, ArtifactStore
+from forged.pipeline.state import PipelineStage, PipelineState, StageOutput
+
+from . import Agent, AgentOutput
+
+_LOG = logging.getLogger(__name__)
+
+# Fallback cells used when the LLM response cannot be parsed as a JSON array.
+_FALLBACK_CELLS = [
+    {"type": "markdown", "source": "# Lesson\n\nIntroduction to the topic."},
+    {
+        "type": "code",
+        "source": (
+            "# Setup check — run me first\n"
+            "import sys\n"
+            'print("Setup OK — Python", sys.version.split()[0])'
+        ),
+    },
+]
+
+
+class CodeAuthorAgent(Agent[AgentOutput]):
+    """Converts a lesson plan into a runnable Jupyter notebook.
+
+    Reads the most recent lesson_plan artifact from the store and builds
+    notebook cells by calling the configured LLM backend.
+    """
+
+    def __init__(self, personas_dir: Path | None = None, llm_client=None) -> None:
+        super().__init__(personas_dir=personas_dir, llm_client=llm_client)
+
+    def _load_persona(self) -> str:
+        path = self.personas_dir / "code_author.md"
+        return path.read_text(encoding="utf-8")
+
+    def next_stage(self) -> PipelineStage:
+        return PipelineStage.EXECUTOR
+
+    async def run(self, state: PipelineState, store: ArtifactStore) -> PipelineState:
+        user_msg = self._build_user_message(state, store)
+        try:
+            response = self._call_llm(user_msg)
+        except RuntimeError as exc:
+            _LOG.warning("CodeAuthorAgent LLM call failed, using fallback cells: %s", exc)
+            response = json.dumps(_FALLBACK_CELLS)
+        artifact_name = f"lesson_notebook_v{state.iteration}"
+        store.put(Artifact(name=artifact_name, kind="notebook", content=response))
+        output = StageOutput(
+            stage=PipelineStage.CODE_AUTHOR,
+            artifact_name=artifact_name,
+            iteration=state.iteration,
+        )
+        return state.with_output(output).with_current_stage(self.next_stage())
+
+    def _call_llm(self, user_msg: str) -> str:
+        """Call the LLM and return validated JSON-array cell content."""
+        raw = self._llm_client.complete(self.persona, user_msg)
+        return self._parse_cells(raw)
+
+    def _parse_cells(self, raw: str) -> str:
+        """Strip ```json fences and validate the response is a JSON array.
+
+        Returns the cleaned JSON string. Raises RuntimeError on invalid JSON or
+        when the top-level value is not an array.
+        """
+        cleaned = raw.strip()
+        # Strip optional ```json ... ``` fence
+        fence_match = re.search(r"```(?:json)?\s*(.*?)```", cleaned, re.DOTALL)
+        if fence_match:
+            cleaned = fence_match.group(1).strip()
+        try:
+            parsed = json.loads(cleaned)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"CodeAuthorAgent: LLM returned invalid JSON: {exc}") from exc
+        if not isinstance(parsed, list):
+            raise RuntimeError(
+                f"CodeAuthorAgent: expected a JSON array of cells, got {type(parsed).__name__}"
+            )
+        return json.dumps(parsed)
+
+    def _build_user_message(self, state: PipelineState, store: ArtifactStore) -> str:
+        plan_name = self._latest_plan_name(state)
+        plan_content = store.get(plan_name).content if store.has(plan_name) else "(no plan available)"
+        profile_content = store.get("profile").content if store.has("profile") else ""
+        parts = [f"Lesson Plan:\n{plan_content}"]
+        if profile_content:
+            parts.append(f"Learner Profile:\n{profile_content}")
+        feedback = self._extract_routing_feedback(state)
+        if feedback:
+            parts.append(f"Previous feedback to address:\n{feedback}")
+        return "\n\n".join(parts)
+
+    def _latest_plan_name(self, state: PipelineState) -> str:
+        for output in reversed(state.outputs):
+            if output.stage == PipelineStage.PLANNER:
+                return output.artifact_name
+        return f"lesson_plan_v{state.iteration}"
+
+    def _extract_routing_feedback(self, state: PipelineState) -> str:
+        if not state.routing_log:
+            return ""
+        last = state.routing_log[-1]
+        return last.reason

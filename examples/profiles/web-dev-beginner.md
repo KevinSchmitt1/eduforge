@@ -1,7 +1,7 @@
 # Learner profile — beginner web developer
 
 Example of a beginner-oriented profile. Pass it with
-`eduforge build --topic "..." --profile examples/profiles/web-dev-beginner.md`.
+`forged build --topic "..." --profile examples/profiles/web-dev-beginner.md`.
 
 ## Who the learner is
 A self-taught web developer comfortable with HTML/CSS/JavaScript and basic Python,

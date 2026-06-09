@@ -1,16 +1,35 @@
-"""eduforge — build an executed, critiqued teaching notebook from a topic.
+"""forged — build an executed, critiqued teaching notebook from a topic.
 
-Examples:
-  eduforge build --topic "How a hash map works"
-  eduforge build --topic "..." --config config/pipeline.skeleton.yaml \
-      --profile profiles/default.md
-  eduforge pipelines            # list the bundled pipeline configs
-  eduforge clean --keep 10      # prune old runs (asks before deleting)
+Modes of Operation:
 
-Bundled defaults (pipeline configs, personas, the default profile) ship with the
-package. Run output is written to ./runs in the current working directory. Keys are
-read from the environment or a local .env (OPENAI_API_KEY, or OLLAMA_BASE_URL for
-local inference).
+  1. MINIMAL INPUT (uses sensible defaults):
+    forged build --topic "How a hash map works"
+
+  2. STRUCTURED INPUT (customize learner profile and topic):
+    forged build --topic "Hash maps" \
+      --learner-profile templates/examples/learner-backend-junior.yaml \
+      --topic-spec templates/examples/topic-hash-maps.yaml
+
+  3. WITH ASSESSMENT (generate project spec or test):
+    forged build --topic "Transformers" \
+      --learner-profile templates/examples/learner-ml-practitioner.yaml \
+      --topic-spec templates/examples/topic-transformers.yaml \
+      --assessment templates/examples/assessment-project.yaml
+
+  4. LEGACY (markdown profile, for backward compatibility):
+    forged build --topic "..." --profile profiles/default.md
+
+Other commands:
+  forged pipelines            # list the bundled pipeline configs
+  forged clean --keep 10      # prune old runs (asks before deleting)
+
+Template files:
+  Copy templates from templates/examples/ or create your own following
+  templates/learner_profile.template.yaml. See templates/README.md for details.
+
+Bundled defaults (pipeline configs, personas) ship with the package. Run output
+is written to ./runs in the current working directory. Keys are read from the
+environment or a local .env (OPENAI_API_KEY, or OLLAMA_BASE_URL for local inference).
 """
 
 from __future__ import annotations
@@ -22,6 +41,7 @@ import sys
 from pathlib import Path
 
 from .config import load_pipeline
+from .models import AssessmentApproach, LearnerProfile, TopicSpecification
 from .orchestrator import MANIFEST_FILE, Orchestrator
 from .progress import Spinner
 
@@ -59,8 +79,26 @@ def _cmd_build(args) -> int:
 
     try:
         pipeline = load_pipeline(args.config)
-        profile = _read_profile(Path(args.profile))
-    except (FileNotFoundError, ValueError) as exc:
+
+        # Load structured inputs (or use defaults)
+        learner_profile = (
+            LearnerProfile.from_yaml(args.learner_profile)
+            if args.learner_profile
+            else _default_learner_profile()
+        )
+
+        topic_spec = (
+            TopicSpecification.from_yaml(args.topic_spec)
+            if args.topic_spec
+            else _default_topic_spec(topic)
+        )
+
+        assessment_approach = (
+            AssessmentApproach.from_yaml(args.assessment)
+            if args.assessment
+            else None
+        )
+    except (FileNotFoundError, ValueError, TypeError) as exc:
         print(f"✗ {exc}", file=sys.stderr)
         return EXIT_USAGE
 
@@ -70,11 +108,19 @@ def _cmd_build(args) -> int:
         runs_root=Path(args.runs),
     )
 
-    print(_build_header(pipeline, args.profile))
+    profile_label = (
+        Path(args.learner_profile).name
+        if args.learner_profile
+        else "default"
+    )
+    print(_build_header(pipeline, profile_label))
     reporter = _StageReporter()
     try:
         store = orchestrator.run(
-            topic, profile, profile_label=Path(args.profile).name,
+            brief=topic,
+            learner_profile=learner_profile,
+            topic_spec=topic_spec,
+            assessment_approach=assessment_approach,
             on_stage=reporter,
         )
     except Exception as exc:  # noqa: BLE001 — top-level: report cleanly, exit non-zero
@@ -195,7 +241,7 @@ def _build_header(pipeline, profile_label: str) -> str:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="eduforge",
+        prog="forged",
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -206,11 +252,32 @@ def _build_parser() -> argparse.ArgumentParser:
     build.add_argument(
         "--config", default=str(DEFAULT_CONFIG),
         help="Pipeline YAML (default: bundled review-loop). "
-             "Run 'eduforge pipelines' to list bundled options.",
+             "Run 'forged pipelines' to list bundled options.",
     )
     build.add_argument(
         "--profile", default=str(DEFAULT_PROFILE),
-        help="Learner profile: prior knowledge + environment/prerequisites",
+        help="[Legacy] Learner profile markdown file (for backward compatibility)",
+    )
+    build.add_argument(
+        "--learner-profile",
+        type=Path,
+        help="Path to learner_profile.yaml. Describes learner background, learning style, "
+             "and material density. Copy from templates/examples/ or create your own. "
+             "Uses sensible default if omitted.",
+    )
+    build.add_argument(
+        "--topic-spec",
+        type=Path,
+        help="Path to topic_specification.yaml. Defines scope, learning objectives, "
+             "prerequisites, and depth. Copy from templates/examples/ or create your own. "
+             "Uses sensible default if omitted.",
+    )
+    build.add_argument(
+        "--assessment",
+        type=Path,
+        help="Path to assessment_approach.yaml. Specifies project spec or knowledge test. "
+             "Optional; skips assessment generation if omitted. "
+             "See templates/assessment_approach.template.yaml.",
     )
     build.add_argument(
         "--runs", default=str(Path.cwd() / "runs"),
@@ -239,6 +306,32 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Root directory for run outputs (default: ./runs)",
     )
     return parser
+
+
+def _default_learner_profile() -> LearnerProfile:
+    """Sensible defaults when no profile is provided."""
+    return LearnerProfile(
+        name="Default Learner",
+        description="Self-study for professional development",
+        prior_knowledge=["Basic understanding of the topic"],
+        environment="jupyter_notebook",
+        material_density="standard",
+        learning_style="hands_on",
+        background_context="Self-directed learning; prefers practical examples",
+    )
+
+
+def _default_topic_spec(topic: str) -> TopicSpecification:
+    """Sensible defaults when no topic spec is provided."""
+    return TopicSpecification(
+        title=topic,
+        scope="implementation",
+        learning_objectives=[f"Understand {topic}"],
+        prerequisites=[],
+        constraints="",
+        depth="intermediate",
+        focus_areas=[topic],
+    )
 
 
 def _read_profile(path: Path) -> str:

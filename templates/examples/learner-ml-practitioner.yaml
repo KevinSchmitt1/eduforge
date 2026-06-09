@@ -1,0 +1,27 @@
+# Example: ML Practitioner
+# ========================
+# Learner profile for an experienced ML engineer learning LLM-specific optimization
+
+name: "ML Practitioner (LLM Focus)"
+
+description: |
+  5+ years of ML/Data Science experience.
+  Strong in deep learning and model deployment; new to LLM-specific inference optimization.
+
+prior_knowledge:
+  - "Deep learning frameworks (PyTorch, TensorFlow)"
+  - "Model training, evaluation, and deployment"
+  - "Distributed training basics (data parallelism)"
+  - "Linear algebra and probability"
+
+environment: "jupyter_notebook"
+
+material_density: "standard"
+
+learning_style: "project_based"
+
+background_context: |
+  Goal: Contribute to LLM inference optimization work.
+  Works at an AI research company with strong engineering culture.
+  Wants to understand trade-offs (latency vs accuracy, memory vs speed).
+  Has GPU access (RTX 3090 or cloud GPU).

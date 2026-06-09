@@ -1,0 +1,834 @@
+"""Concrete agent tests for Phase 5 — all five agents.
+
+Tests cover persona loading, next_stage(), run() state transitions,
+artifact production, immutability, and reviser routing integration.
+All run() methods are mocked at the LLM layer — no real API calls.
+
+TDD: tests written FIRST (RED phase) before implementation exists.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import inspect
+import json
+from pathlib import Path
+
+import pytest
+
+from forged.artifacts import Artifact, ArtifactStore
+from forged.pipeline.state import (
+    PipelineStage,
+    PipelineState,
+    StageOutput,
+    create_initial_state,
+)
+
+
+# ── Fixtures ──────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def personas_dir(tmp_path: Path) -> Path:
+    """Temporary personas directory populated with all required persona files."""
+    d = tmp_path / "personas"
+    d.mkdir()
+    (d / "planner.md").write_text(
+        "You are the Lesson Planner. Plan lessons for learners.", encoding="utf-8"
+    )
+    (d / "code_author.md").write_text(
+        "You are the Code Author. Write notebook code cells.", encoding="utf-8"
+    )
+    (d / "student.md").write_text(
+        "You are the Student. Review the notebook as a learner.", encoding="utf-8"
+    )
+    (d / "reviser.md").write_text(
+        "You are the Reviser. Improve notebook quality.", encoding="utf-8"
+    )
+    return d
+
+
+@pytest.fixture
+def artifact_store(tmp_path: Path) -> ArtifactStore:
+    """In-memory-backed ArtifactStore writing to a temp run directory."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    return ArtifactStore(run_dir)
+
+
+@pytest.fixture
+def initial_state() -> PipelineState:
+    """Fresh pipeline state at iteration 0, stage PLANNER."""
+    return create_initial_state(run_id="test-run-001")
+
+
+@pytest.fixture
+def state_with_plan(artifact_store: ArtifactStore) -> PipelineState:
+    """Pipeline state after planner ran — has a lesson_plan artifact."""
+    state = create_initial_state(run_id="test-run-002")
+    artifact_store.put(
+        Artifact(name="lesson_plan_v0", kind="text", content="# Lesson: Hash Maps\n\n## Objectives\n- Understand hash maps")
+    )
+    return state.with_output(
+        StageOutput(stage=PipelineStage.PLANNER, artifact_name="lesson_plan_v0", iteration=0)
+    ).with_current_stage(PipelineStage.CODE_AUTHOR)
+
+
+@pytest.fixture
+def state_with_notebook(artifact_store: ArtifactStore) -> PipelineState:
+    """Pipeline state after code author ran — has a lesson_notebook artifact."""
+    state = create_initial_state(run_id="test-run-003")
+    notebook_cells = [
+        {"type": "markdown", "source": "# Hash Maps\n\nIntroduction to hash maps."},
+        {"type": "code", "source": "data = {'key': 'value'}\nprint(data)"},
+    ]
+    artifact_store.put(
+        Artifact(
+            name="lesson_notebook_v0",
+            kind="notebook",
+            content=json.dumps(notebook_cells),
+        )
+    )
+    return state.with_output(
+        StageOutput(
+            stage=PipelineStage.CODE_AUTHOR,
+            artifact_name="lesson_notebook_v0",
+            iteration=0,
+        )
+    ).with_current_stage(PipelineStage.EXECUTOR)
+
+
+@pytest.fixture
+def state_with_execution(artifact_store: ArtifactStore) -> PipelineState:
+    """Pipeline state after executor ran — has execution_report artifact."""
+    state = create_initial_state(run_id="test-run-004")
+    exec_report = {"ok": True, "failed_cells": [], "error_summary": None}
+    artifact_store.put(
+        Artifact(
+            name="execution_report_v0",
+            kind="json",
+            content=json.dumps(exec_report),
+        )
+    )
+    notebook_cells = [
+        {"type": "markdown", "source": "# Hash Maps"},
+        {"type": "code", "source": "print('hello')"},
+    ]
+    artifact_store.put(
+        Artifact(name="lesson_notebook_v0", kind="notebook", content=json.dumps(notebook_cells))
+    )
+    return state.with_output(
+        StageOutput(
+            stage=PipelineStage.EXECUTOR,
+            artifact_name="execution_report_v0",
+            iteration=0,
+        )
+    ).with_current_stage(PipelineStage.STUDENT)
+
+
+@pytest.fixture
+def state_with_grade(artifact_store: ArtifactStore) -> PipelineState:
+    """Pipeline state after student ran — has grade_report and execution_report artifacts."""
+    state = create_initial_state(run_id="test-run-005")
+    exec_report = {"ok": True, "failed_cells": [], "error_summary": None}
+    grade_report = {
+        "quality_score": 90.0,
+        "blockers": [],
+        "findings": [],
+    }
+    artifact_store.put(
+        Artifact(
+            name="execution_report_v0",
+            kind="json",
+            content=json.dumps(exec_report),
+        )
+    )
+    artifact_store.put(
+        Artifact(
+            name="student_grade_report_v0",
+            kind="json",
+            content=json.dumps(grade_report),
+        )
+    )
+    return state.with_output(
+        StageOutput(
+            stage=PipelineStage.STUDENT,
+            artifact_name="student_grade_report_v0",
+            iteration=0,
+        )
+    ).with_current_stage(PipelineStage.REVISER)
+
+
+# ── PlannerAgent tests ────────────────────────────────────────────────────────
+
+
+@pytest.mark.unit
+def test_planner_agent_loads_planner_persona(personas_dir: Path) -> None:
+    """PlannerAgent._load_persona() returns the planner.md content as a str."""
+    from forged.pipeline.agents.planner import PlannerAgent
+
+    agent = PlannerAgent(personas_dir=personas_dir)
+    assert isinstance(agent.persona, str)
+    assert "Lesson Planner" in agent.persona
+
+
+@pytest.mark.unit
+def test_planner_agent_next_stage(personas_dir: Path) -> None:
+    """PlannerAgent.next_stage() returns PipelineStage.CODE_AUTHOR."""
+    from forged.pipeline.agents.planner import PlannerAgent
+
+    agent = PlannerAgent(personas_dir=personas_dir)
+    assert agent.next_stage() == PipelineStage.CODE_AUTHOR
+
+
+@pytest.mark.unit
+def test_planner_agent_run_updates_stage(
+    personas_dir: Path,
+    initial_state: PipelineState,
+    artifact_store: ArtifactStore,
+) -> None:
+    """PlannerAgent.run() returns a state with current_stage=CODE_AUTHOR."""
+    from forged.pipeline.agents.planner import PlannerAgent
+
+    agent = PlannerAgent(personas_dir=personas_dir)
+    result = asyncio.get_event_loop().run_until_complete(
+        agent.run(initial_state, artifact_store)
+    )
+    assert result.current_stage == PipelineStage.CODE_AUTHOR
+
+
+@pytest.mark.unit
+def test_planner_agent_run_adds_output(
+    personas_dir: Path,
+    initial_state: PipelineState,
+    artifact_store: ArtifactStore,
+) -> None:
+    """PlannerAgent.run() returns a state with outputs list increased by 1."""
+    from forged.pipeline.agents.planner import PlannerAgent
+
+    agent = PlannerAgent(personas_dir=personas_dir)
+    result = asyncio.get_event_loop().run_until_complete(
+        agent.run(initial_state, artifact_store)
+    )
+    assert len(result.outputs) == len(initial_state.outputs) + 1
+
+
+@pytest.mark.unit
+def test_planner_agent_run_is_immutable(
+    personas_dir: Path,
+    initial_state: PipelineState,
+    artifact_store: ArtifactStore,
+) -> None:
+    """PlannerAgent.run() never mutates the input state."""
+    from forged.pipeline.agents.planner import PlannerAgent
+
+    original_stage = initial_state.current_stage
+    original_outputs_count = len(initial_state.outputs)
+    agent = PlannerAgent(personas_dir=personas_dir)
+    asyncio.get_event_loop().run_until_complete(agent.run(initial_state, artifact_store))
+    assert initial_state.current_stage == original_stage
+    assert len(initial_state.outputs) == original_outputs_count
+
+
+@pytest.mark.unit
+def test_planner_agent_run_writes_artifact(
+    personas_dir: Path,
+    initial_state: PipelineState,
+    artifact_store: ArtifactStore,
+) -> None:
+    """PlannerAgent.run() writes a lesson plan artifact to the store."""
+    from forged.pipeline.agents.planner import PlannerAgent
+
+    agent = PlannerAgent(personas_dir=personas_dir)
+    result = asyncio.get_event_loop().run_until_complete(
+        agent.run(initial_state, artifact_store)
+    )
+    artifact_name = result.outputs[-1].artifact_name
+    assert artifact_store.has(artifact_name)
+
+
+# ── CodeAuthorAgent tests ─────────────────────────────────────────────────────
+
+
+@pytest.mark.unit
+def test_code_author_loads_persona(personas_dir: Path) -> None:
+    """CodeAuthorAgent._load_persona() returns the code_author.md content."""
+    from forged.pipeline.agents.code_author import CodeAuthorAgent
+
+    agent = CodeAuthorAgent(personas_dir=personas_dir)
+    assert isinstance(agent.persona, str)
+    assert "Code Author" in agent.persona
+
+
+@pytest.mark.unit
+def test_code_author_next_stage(personas_dir: Path) -> None:
+    """CodeAuthorAgent.next_stage() returns PipelineStage.EXECUTOR."""
+    from forged.pipeline.agents.code_author import CodeAuthorAgent
+
+    agent = CodeAuthorAgent(personas_dir=personas_dir)
+    assert agent.next_stage() == PipelineStage.EXECUTOR
+
+
+@pytest.mark.unit
+def test_code_author_run_updates_stage(
+    personas_dir: Path,
+    state_with_plan: PipelineState,
+    artifact_store: ArtifactStore,
+) -> None:
+    """CodeAuthorAgent.run() returns a state with current_stage=EXECUTOR."""
+    from forged.pipeline.agents.code_author import CodeAuthorAgent
+
+    agent = CodeAuthorAgent(personas_dir=personas_dir)
+    result = asyncio.get_event_loop().run_until_complete(
+        agent.run(state_with_plan, artifact_store)
+    )
+    assert result.current_stage == PipelineStage.EXECUTOR
+
+
+@pytest.mark.unit
+def test_code_author_run_adds_output(
+    personas_dir: Path,
+    state_with_plan: PipelineState,
+    artifact_store: ArtifactStore,
+) -> None:
+    """CodeAuthorAgent.run() adds one output entry with a notebook artifact name."""
+    from forged.pipeline.agents.code_author import CodeAuthorAgent
+
+    agent = CodeAuthorAgent(personas_dir=personas_dir)
+    result = asyncio.get_event_loop().run_until_complete(
+        agent.run(state_with_plan, artifact_store)
+    )
+    assert len(result.outputs) == len(state_with_plan.outputs) + 1
+    artifact_name = result.outputs[-1].artifact_name
+    assert "notebook" in artifact_name.lower()
+
+
+@pytest.mark.unit
+def test_code_author_run_is_immutable(
+    personas_dir: Path,
+    state_with_plan: PipelineState,
+    artifact_store: ArtifactStore,
+) -> None:
+    """CodeAuthorAgent.run() never mutates the input state."""
+    from forged.pipeline.agents.code_author import CodeAuthorAgent
+
+    original_stage = state_with_plan.current_stage
+    original_outputs_count = len(state_with_plan.outputs)
+    agent = CodeAuthorAgent(personas_dir=personas_dir)
+    asyncio.get_event_loop().run_until_complete(
+        agent.run(state_with_plan, artifact_store)
+    )
+    assert state_with_plan.current_stage == original_stage
+    assert len(state_with_plan.outputs) == original_outputs_count
+
+
+# ── ExecutorAgent tests ───────────────────────────────────────────────────────
+
+
+@pytest.mark.unit
+def test_executor_agent_loads_persona(personas_dir: Path) -> None:
+    """ExecutorAgent._load_persona() returns a string (persona or empty string)."""
+    from forged.pipeline.agents.executor import ExecutorAgent
+
+    agent = ExecutorAgent(personas_dir=personas_dir)
+    assert isinstance(agent.persona, str)
+
+
+@pytest.mark.unit
+def test_executor_agent_next_stage(personas_dir: Path) -> None:
+    """ExecutorAgent.next_stage() returns PipelineStage.STUDENT."""
+    from forged.pipeline.agents.executor import ExecutorAgent
+
+    agent = ExecutorAgent(personas_dir=personas_dir)
+    assert agent.next_stage() == PipelineStage.STUDENT
+
+
+@pytest.mark.unit
+def test_executor_agent_run_updates_stage(
+    personas_dir: Path,
+    state_with_notebook: PipelineState,
+    artifact_store: ArtifactStore,
+) -> None:
+    """ExecutorAgent.run() returns a state with current_stage=STUDENT."""
+    from forged.pipeline.agents.executor import ExecutorAgent
+
+    agent = ExecutorAgent(personas_dir=personas_dir)
+    result = asyncio.get_event_loop().run_until_complete(
+        agent.run(state_with_notebook, artifact_store)
+    )
+    assert result.current_stage == PipelineStage.STUDENT
+
+
+@pytest.mark.unit
+def test_executor_agent_run_returns_execution_report(
+    personas_dir: Path,
+    state_with_notebook: PipelineState,
+    artifact_store: ArtifactStore,
+) -> None:
+    """ExecutorAgent.run() writes an execution_report artifact to the store."""
+    from forged.pipeline.agents.executor import ExecutorAgent
+
+    agent = ExecutorAgent(personas_dir=personas_dir)
+    result = asyncio.get_event_loop().run_until_complete(
+        agent.run(state_with_notebook, artifact_store)
+    )
+    artifact_name = result.outputs[-1].artifact_name
+    assert "execution" in artifact_name.lower()
+    assert artifact_store.has(artifact_name)
+    content = artifact_store.get(artifact_name).content
+    parsed = json.loads(content)
+    assert "ok" in parsed
+
+
+@pytest.mark.unit
+def test_executor_agent_run_is_immutable(
+    personas_dir: Path,
+    state_with_notebook: PipelineState,
+    artifact_store: ArtifactStore,
+) -> None:
+    """ExecutorAgent.run() never mutates the input state."""
+    from forged.pipeline.agents.executor import ExecutorAgent
+
+    original_stage = state_with_notebook.current_stage
+    original_outputs_count = len(state_with_notebook.outputs)
+    agent = ExecutorAgent(personas_dir=personas_dir)
+    asyncio.get_event_loop().run_until_complete(
+        agent.run(state_with_notebook, artifact_store)
+    )
+    assert state_with_notebook.current_stage == original_stage
+    assert len(state_with_notebook.outputs) == original_outputs_count
+
+
+# ── StudentAgent tests ────────────────────────────────────────────────────────
+
+
+@pytest.mark.unit
+def test_student_agent_loads_persona(personas_dir: Path) -> None:
+    """StudentAgent._load_persona() returns the student.md content."""
+    from forged.pipeline.agents.student import StudentAgent
+
+    agent = StudentAgent(personas_dir=personas_dir)
+    assert isinstance(agent.persona, str)
+    assert "Student" in agent.persona
+
+
+@pytest.mark.unit
+def test_student_agent_next_stage(personas_dir: Path) -> None:
+    """StudentAgent.next_stage() returns None — Reviser determines routing."""
+    from forged.pipeline.agents.student import StudentAgent
+
+    agent = StudentAgent(personas_dir=personas_dir)
+    assert agent.next_stage() is None
+
+
+@pytest.mark.unit
+def test_student_agent_run_updates_stage(
+    personas_dir: Path,
+    state_with_execution: PipelineState,
+    artifact_store: ArtifactStore,
+) -> None:
+    """StudentAgent.run() returns a state with current_stage=REVISER."""
+    from forged.pipeline.agents.student import StudentAgent
+
+    agent = StudentAgent(personas_dir=personas_dir)
+    result = asyncio.get_event_loop().run_until_complete(
+        agent.run(state_with_execution, artifact_store)
+    )
+    assert result.current_stage == PipelineStage.REVISER
+
+
+@pytest.mark.unit
+def test_student_agent_run_adds_output(
+    personas_dir: Path,
+    state_with_execution: PipelineState,
+    artifact_store: ArtifactStore,
+) -> None:
+    """StudentAgent.run() adds one output entry with a grade report artifact."""
+    from forged.pipeline.agents.student import StudentAgent
+
+    agent = StudentAgent(personas_dir=personas_dir)
+    result = asyncio.get_event_loop().run_until_complete(
+        agent.run(state_with_execution, artifact_store)
+    )
+    assert len(result.outputs) == len(state_with_execution.outputs) + 1
+    artifact_name = result.outputs[-1].artifact_name
+    assert "grade" in artifact_name.lower() or "student" in artifact_name.lower()
+
+
+@pytest.mark.unit
+def test_student_agent_run_grade_report_has_quality_score(
+    personas_dir: Path,
+    state_with_execution: PipelineState,
+    artifact_store: ArtifactStore,
+) -> None:
+    """StudentAgent.run() writes a JSON grade report with a quality_score field."""
+    from forged.pipeline.agents.student import StudentAgent
+
+    agent = StudentAgent(personas_dir=personas_dir)
+    result = asyncio.get_event_loop().run_until_complete(
+        agent.run(state_with_execution, artifact_store)
+    )
+    artifact_name = result.outputs[-1].artifact_name
+    content = artifact_store.get(artifact_name).content
+    parsed = json.loads(content)
+    assert "quality_score" in parsed
+    assert isinstance(parsed["quality_score"], (int, float))
+
+
+@pytest.mark.unit
+def test_student_agent_run_is_immutable(
+    personas_dir: Path,
+    state_with_execution: PipelineState,
+    artifact_store: ArtifactStore,
+) -> None:
+    """StudentAgent.run() never mutates the input state."""
+    from forged.pipeline.agents.student import StudentAgent
+
+    original_stage = state_with_execution.current_stage
+    original_outputs_count = len(state_with_execution.outputs)
+    agent = StudentAgent(personas_dir=personas_dir)
+    asyncio.get_event_loop().run_until_complete(
+        agent.run(state_with_execution, artifact_store)
+    )
+    assert state_with_execution.current_stage == original_stage
+    assert len(state_with_execution.outputs) == original_outputs_count
+
+
+# ── RevisorAgent tests ────────────────────────────────────────────────────────
+
+
+@pytest.mark.unit
+def test_revisor_agent_loads_persona(personas_dir: Path) -> None:
+    """RevisorAgent._load_persona() returns a non-empty string."""
+    from forged.pipeline.agents.reviser import RevisorAgent
+
+    agent = RevisorAgent(personas_dir=personas_dir)
+    assert isinstance(agent.persona, str)
+
+
+@pytest.mark.unit
+def test_revisor_agent_next_stage(personas_dir: Path) -> None:
+    """RevisorAgent.next_stage() returns None — routing is done by the graph."""
+    from forged.pipeline.agents.reviser import RevisorAgent
+
+    agent = RevisorAgent(personas_dir=personas_dir)
+    assert agent.next_stage() is None
+
+
+@pytest.mark.unit
+def test_revisor_agent_run_adds_routing_decision(
+    personas_dir: Path,
+    state_with_grade: PipelineState,
+    artifact_store: ArtifactStore,
+) -> None:
+    """RevisorAgent.run() returns state with at least one routing_log entry."""
+    from forged.pipeline.agents.reviser import RevisorAgent
+
+    agent = RevisorAgent(personas_dir=personas_dir)
+    result = asyncio.get_event_loop().run_until_complete(
+        agent.run(state_with_grade, artifact_store)
+    )
+    # Either routing_log grew (non-terminal) or is_terminal was set
+    routing_grew = len(result.routing_log) > len(state_with_grade.routing_log)
+    became_terminal = result.is_terminal
+    assert routing_grew or became_terminal
+
+
+@pytest.mark.unit
+def test_revisor_agent_run_reads_classification(
+    personas_dir: Path,
+    state_with_grade: PipelineState,
+    artifact_store: ArtifactStore,
+) -> None:
+    """RevisorAgent.run() calls classify() and uses the result to route."""
+    from forged.pipeline.agents.reviser import RevisorAgent
+
+    agent = RevisorAgent(personas_dir=personas_dir)
+    result = asyncio.get_event_loop().run_until_complete(
+        agent.run(state_with_grade, artifact_store)
+    )
+    # With quality_score=90 (above threshold=80) and ok=True, should terminate as ACCEPTABLE
+    assert result.is_terminal
+
+
+@pytest.mark.unit
+def test_revisor_agent_run_respects_budget(
+    personas_dir: Path,
+    artifact_store: ArtifactStore,
+) -> None:
+    """RevisorAgent.run() respects Router budget and terminates when exhausted."""
+    from forged.pipeline.agents.reviser import RevisorAgent
+    from forged.pipeline.router import RoutingBudget
+
+    # State at REVISER with grade report showing low quality (triggers CONTENT_QUALITY)
+    state = create_initial_state(run_id="test-budget-001")
+    state = state.with_current_stage(PipelineStage.REVISER)
+    # Exhaust the reviser budget by setting reviser attempts to 1 (matches default budget=1)
+    state = state.with_attempt(PipelineStage.REVISER)
+
+    exec_report = {"ok": True, "failed_cells": [], "error_summary": None}
+    grade_report = {
+        "quality_score": 40.0,  # Below 80 → CONTENT_QUALITY → routes to REVISER
+        "blockers": [],
+        "findings": [],
+    }
+    artifact_store.put(
+        Artifact(
+            name="execution_report_v0",
+            kind="json",
+            content=json.dumps(exec_report),
+        )
+    )
+    artifact_store.put(
+        Artifact(
+            name="student_grade_report_v0",
+            kind="json",
+            content=json.dumps(grade_report),
+        )
+    )
+    state = state.with_output(
+        StageOutput(
+            stage=PipelineStage.STUDENT,
+            artifact_name="student_grade_report_v0",
+            iteration=0,
+        )
+    )
+
+    agent = RevisorAgent(personas_dir=personas_dir, budget=RoutingBudget(reviser=1))
+    result = asyncio.get_event_loop().run_until_complete(
+        agent.run(state, artifact_store)
+    )
+    # Budget for reviser is 1, already used 1 — should terminate
+    assert result.is_terminal
+
+
+@pytest.mark.unit
+def test_revisor_agent_run_is_immutable(
+    personas_dir: Path,
+    state_with_grade: PipelineState,
+    artifact_store: ArtifactStore,
+) -> None:
+    """RevisorAgent.run() never mutates the input state."""
+    from forged.pipeline.agents.reviser import RevisorAgent
+
+    original_stage = state_with_grade.current_stage
+    original_routing_log_len = len(state_with_grade.routing_log)
+    agent = RevisorAgent(personas_dir=personas_dir)
+    asyncio.get_event_loop().run_until_complete(
+        agent.run(state_with_grade, artifact_store)
+    )
+    assert state_with_grade.current_stage == original_stage
+    assert len(state_with_grade.routing_log) == original_routing_log_len
+
+
+# ── Shared cross-agent tests ──────────────────────────────────────────────────
+
+
+@pytest.mark.unit
+def test_all_agents_are_async(personas_dir: Path) -> None:
+    """Every concrete agent's run() must be an async coroutine function."""
+    from forged.pipeline.agents.code_author import CodeAuthorAgent
+    from forged.pipeline.agents.executor import ExecutorAgent
+    from forged.pipeline.agents.planner import PlannerAgent
+    from forged.pipeline.agents.reviser import RevisorAgent
+    from forged.pipeline.agents.student import StudentAgent
+
+    agent_classes = [
+        PlannerAgent,
+        CodeAuthorAgent,
+        ExecutorAgent,
+        StudentAgent,
+        RevisorAgent,
+    ]
+    for cls in agent_classes:
+        assert inspect.iscoroutinefunction(cls.run), (
+            f"{cls.__name__}.run() must be an async coroutine function"
+        )
+
+
+@pytest.mark.unit
+def test_all_agents_implement_abstract_methods(personas_dir: Path) -> None:
+    """Every concrete agent can be instantiated without TypeError (all abstracts implemented)."""
+    from forged.pipeline.agents.code_author import CodeAuthorAgent
+    from forged.pipeline.agents.executor import ExecutorAgent
+    from forged.pipeline.agents.planner import PlannerAgent
+    from forged.pipeline.agents.reviser import RevisorAgent
+    from forged.pipeline.agents.student import StudentAgent
+
+    for cls in [PlannerAgent, CodeAuthorAgent, ExecutorAgent, StudentAgent, RevisorAgent]:
+        instance = cls(personas_dir=personas_dir)
+        assert instance is not None, f"{cls.__name__} could not be instantiated"
+
+
+@pytest.mark.unit
+def test_planner_output_stage_matches(
+    personas_dir: Path,
+    initial_state: PipelineState,
+    artifact_store: ArtifactStore,
+) -> None:
+    """PlannerAgent output StageOutput.stage == PipelineStage.PLANNER."""
+    from forged.pipeline.agents.planner import PlannerAgent
+
+    agent = PlannerAgent(personas_dir=personas_dir)
+    result = asyncio.get_event_loop().run_until_complete(
+        agent.run(initial_state, artifact_store)
+    )
+    assert result.outputs[-1].stage == PipelineStage.PLANNER
+
+
+@pytest.mark.unit
+def test_code_author_output_stage_matches(
+    personas_dir: Path,
+    state_with_plan: PipelineState,
+    artifact_store: ArtifactStore,
+) -> None:
+    """CodeAuthorAgent output StageOutput.stage == PipelineStage.CODE_AUTHOR."""
+    from forged.pipeline.agents.code_author import CodeAuthorAgent
+
+    agent = CodeAuthorAgent(personas_dir=personas_dir)
+    result = asyncio.get_event_loop().run_until_complete(
+        agent.run(state_with_plan, artifact_store)
+    )
+    assert result.outputs[-1].stage == PipelineStage.CODE_AUTHOR
+
+
+@pytest.mark.unit
+def test_executor_output_stage_matches(
+    personas_dir: Path,
+    state_with_notebook: PipelineState,
+    artifact_store: ArtifactStore,
+) -> None:
+    """ExecutorAgent output StageOutput.stage == PipelineStage.EXECUTOR."""
+    from forged.pipeline.agents.executor import ExecutorAgent
+
+    agent = ExecutorAgent(personas_dir=personas_dir)
+    result = asyncio.get_event_loop().run_until_complete(
+        agent.run(state_with_notebook, artifact_store)
+    )
+    assert result.outputs[-1].stage == PipelineStage.EXECUTOR
+
+
+@pytest.mark.unit
+def test_student_output_stage_matches(
+    personas_dir: Path,
+    state_with_execution: PipelineState,
+    artifact_store: ArtifactStore,
+) -> None:
+    """StudentAgent output StageOutput.stage == PipelineStage.STUDENT."""
+    from forged.pipeline.agents.student import StudentAgent
+
+    agent = StudentAgent(personas_dir=personas_dir)
+    result = asyncio.get_event_loop().run_until_complete(
+        agent.run(state_with_execution, artifact_store)
+    )
+    assert result.outputs[-1].stage == PipelineStage.STUDENT
+
+
+@pytest.mark.unit
+def test_revisor_low_quality_routes_to_reviser_when_budget_allows(
+    personas_dir: Path,
+    artifact_store: ArtifactStore,
+) -> None:
+    """RevisorAgent with CONTENT_QUALITY signal routes to REVISER when budget available."""
+    from forged.pipeline.agents.reviser import RevisorAgent
+    from forged.pipeline.router import RoutingBudget
+
+    state = create_initial_state(run_id="test-routing-001")
+    state = state.with_current_stage(PipelineStage.REVISER)
+
+    exec_report = {"ok": True, "failed_cells": [], "error_summary": None}
+    grade_report = {
+        "quality_score": 40.0,
+        "blockers": [],
+        "findings": [],
+    }
+    artifact_store.put(
+        Artifact(name="execution_report_v0", kind="json", content=json.dumps(exec_report))
+    )
+    artifact_store.put(
+        Artifact(name="student_grade_report_v0", kind="json", content=json.dumps(grade_report))
+    )
+    state = state.with_output(
+        StageOutput(stage=PipelineStage.STUDENT, artifact_name="student_grade_report_v0", iteration=0)
+    )
+
+    # Budget with reviser=2 so first route still has budget
+    agent = RevisorAgent(personas_dir=personas_dir, budget=RoutingBudget(reviser=2))
+    result = asyncio.get_event_loop().run_until_complete(
+        agent.run(state, artifact_store)
+    )
+    # Should NOT terminate — should route (routing_log grows)
+    assert not result.is_terminal
+    assert len(result.routing_log) > 0
+    assert result.get_stage_attempt_count(PipelineStage.REVISER) == 1
+
+
+@pytest.mark.unit
+def test_revisor_accepts_notebook_level_findings_from_real_llm_output(
+    personas_dir: Path,
+    artifact_store: ArtifactStore,
+) -> None:
+    """Notebook-level findings from the live student prompt should not crash parsing."""
+    from forged.pipeline.agents.reviser import RevisorAgent
+
+    state = create_initial_state(run_id="test-routing-notebook-001")
+    state = state.with_current_stage(PipelineStage.REVISER)
+
+    exec_report = {"ok": True, "failed_cells": [], "error_summary": None}
+    grade_report = {
+        "quality_score": 70.0,
+        "blockers": [],
+        "findings": [
+            {
+                "source": "student",
+                "severity": "NITPICK",
+                "scope": "notebook",
+                "location": {"type": "notebook", "cell_index": None, "label": None},
+                "text": "Needs a stronger end-to-end example.",
+            }
+        ],
+    }
+    artifact_store.put(
+        Artifact(name="execution_report_v0", kind="json", content=json.dumps(exec_report))
+    )
+    artifact_store.put(
+        Artifact(name="student_grade_report_v0", kind="json", content=json.dumps(grade_report))
+    )
+    state = state.with_output(
+        StageOutput(stage=PipelineStage.STUDENT, artifact_name="student_grade_report_v0", iteration=0)
+    )
+
+    agent = RevisorAgent(personas_dir=personas_dir)
+    result = asyncio.get_event_loop().run_until_complete(agent.run(state, artifact_store))
+
+    assert result.is_terminal or len(result.routing_log) > len(state.routing_log)
+
+
+@pytest.mark.unit
+def test_revisor_handles_malformed_grade_report_json_gracefully(
+    personas_dir: Path,
+    artifact_store: ArtifactStore,
+) -> None:
+    """Malformed grade-report JSON should degrade to termination, not crash the pipeline."""
+    from forged.pipeline.agents.reviser import RevisorAgent
+
+    state = create_initial_state(run_id="test-routing-bad-json-001")
+    state = state.with_current_stage(PipelineStage.REVISER)
+    artifact_store.put(
+        Artifact(
+            name="execution_report_v0",
+            kind="json",
+            content=json.dumps({"ok": True, "failed_cells": [], "error_summary": None}),
+        )
+    )
+    artifact_store.put(
+        Artifact(name="student_grade_report_v0", kind="json", content="{not valid json")
+    )
+    state = state.with_output(
+        StageOutput(stage=PipelineStage.STUDENT, artifact_name="student_grade_report_v0", iteration=0)
+    )
+
+    agent = RevisorAgent(personas_dir=personas_dir)
+    result = asyncio.get_event_loop().run_until_complete(agent.run(state, artifact_store))
+
+    assert result.is_terminal

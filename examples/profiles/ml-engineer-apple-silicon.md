@@ -1,7 +1,7 @@
 # Learner profile — ML engineer on Apple Silicon
 
 Example of a specialised profile. Pass it with
-`eduforge build --topic "..." --profile examples/profiles/ml-engineer-apple-silicon.md`.
+`forged build --topic "..." --profile examples/profiles/ml-engineer-apple-silicon.md`.
 
 ## Who the learner is
 An engineer with a solid classical-ML background moving into deep learning and LLMs.

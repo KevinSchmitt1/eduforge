@@ -1,4 +1,4 @@
-"""eduforge — a config-driven multi-agent pipeline for building educational notebooks.
+"""forged — a config-driven multi-agent pipeline for building educational notebooks.
 
 Each stage is a role-specialised agent (researcher, planner, didactics writer,
 code author, executor, student, reviewer). Stages are declared in a YAML pipeline
