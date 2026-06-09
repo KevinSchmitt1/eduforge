@@ -1,9 +1,10 @@
 # Agentic Pipeline — Implementation Status
 
 **As of:** 2026-06-09  
-**Phases complete:** 1–6 (state, classification, routing, agent protocol, concrete agents, LangGraph assembly)  
-**Tests:** 285 total (216 pipeline-specific); all passing  
-**Coverage:** 88% overall; pipeline modules at 92–100%
+**Phases complete:** 1–9 (state → routing → agents → LangGraph → reviser feedback → CLI)  
+**Tests:** 290 total (including CLI integration); all passing  
+**Coverage:** 88%+ overall; pipeline modules at 92–100%  
+**Status:** Production-ready for personal testing
 
 ---
 
@@ -158,73 +159,53 @@ had one entry; `state.is_terminal` was `True`.
 
 ## Known Limitations
 
-### ExecutorAgent is mocked
+✅ **All Phase 7-9 limitations resolved:**
+- ✅ Real executor integrated (Phase 7) — detects notebook failures
+- ✅ Revision brief feedback added (Phase 8) — agents iterate intelligently
+- ✅ CLI command implemented (Phase 9) — `forged agentic --brief "..." --run-dir /path`
 
-`ExecutorAgent._mock_execute()` always returns `{"ok": True, "failed_cells": [], "error_summary": null}`.
-This means the agentic path never detects real notebook execution failures. The linear
-pipeline's `ExecutorStage` runs actual notebooks via nbclient; that code exists but has not
-yet been wired into `ExecutorAgent`. See Phase 7 below.
+### Budget exhaustion behavior
 
-### RevisorAgent does not rewrite notebooks
-
-`RevisorAgent` classifies the failure and records a routing decision. It does not produce
-an artifact. When the pipeline reroutes to CodeAuthor or Planner, those agents see the same
-brief they used the first time — they do not receive structured feedback about what
-specifically failed. The routing decision is in `state.routing_log` but the agents do not
-yet read it. See Phase 8 below.
-
-### Budget exhaustion terminates without a deliverable
-
-If a stage hits its budget before the pipeline reaches `ACCEPTABLE`, the run terminates
-with `is_terminal=True` and a `"budget exhausted"` reason. No notebook is written to
-the final output location. A human must inspect `state.outputs` to retrieve the last
-artifact produced.
-
-### No CLI command
-
-The agentic pipeline is callable as `await run_pipeline(state, store, personas_dir)` from
-Python. There is no `forged build --agentic` flag yet. See Phase 9 below.
+When a stage hits its budget, the pipeline terminates with `is_terminal=True` and
+`terminal_reason="budget exhausted for <stage>"`. The notebook is still written to
+`lesson.ipynb` (latest CodeAuthor output). This is intentional — budget is a safety valve,
+not a failure condition.
 
 ---
 
-## Architectural Roadmap
+## Phase Completion Status
 
-### Phase 7 — Wire the Real Executor
+### ✅ Phase 7 — Wire the Real Executor (Complete)
 
-Replace `ExecutorAgent._mock_execute()` with a call to `forged.executor.ExecutorStage`.
-The stage already exists and is tested; this is a wiring task, not a reimplementation.
+**Done:** `ExecutorAgent._execute_real()` calls `forged.executor.ExecutorStage`.
 
-Expected changes:
-- `forged/pipeline/agents/executor.py`: call `ExecutorStage.run(notebook)`, parse the
-  result into `ExecutionReport`.
-- Add integration test that confirms a notebook with a failing cell produces
-  `classification=CODE_QUALITY`.
-- Update this document.
+Changes made:
+- `forged/pipeline/agents/executor.py`: Integrated real executor with error extraction
+- Detects execution failures (failed cells, error summaries)
+- Returns ExecutionReport format for classification
+- Tests: `test_executor_agent_detects_failing_notebook()`, `test_real_executor_detects_code_quality_failure()`
 
-### Phase 8 — Add Reviser Rewriting
+### ✅ Phase 8 — Add Reviser Rewriting (Complete)
 
-When the Reviser reroutes to CodeAuthor, CodeAuthor should receive structured feedback:
-which cells failed, what the student found, what the routing decision was. Two options:
+**Done:** RevisorAgent writes `revision_brief_v{N}.md` with structured feedback.
 
-1. CodeAuthor reads the latest `student_grade_report_v{N}.json` and
-   `execution_report_v{N}.json` from the store and includes findings in its prompt.
-2. RevisorAgent writes a `revision_brief_v{N}.md` artifact with the synthesised feedback;
-   CodeAuthor reads that artifact.
+Changes made:
+- `forged/pipeline/agents/reviser.py`: Synthesizes revision brief with failure context
+- `forged/pipeline/agents/code_author.py`: Reads revision brief, includes in LLM prompt
+- `forged/pipeline/agents/planner.py`: Reads revision brief when rerouted
+- Result: Agents iterate intelligently based on specific failures
+- Test: `test_reviser_writes_revision_brief()`
 
-Option 2 keeps the agents decoupled and auditable. Whichever approach is chosen, the
-`_build_user_prompt()` method in CodeAuthor and PlannerAgent needs updating.
+### ✅ Phase 9 — Expose via CLI (Complete)
 
-### Phase 9 — Expose via CLI
+**Done:** `forged agentic --brief "..." --run-dir /path` command available.
 
-Add `forged build --agentic` (or a separate subcommand) that:
-1. Creates an `ArtifactStore` for the run.
-2. Calls `run_pipeline(create_initial_state(), store, personas_dir)`.
-3. Writes the final notebook from `state.outputs` to the run directory.
-4. Writes a `SUMMARY.md` equivalent from `state.routing_log`.
-
-This requires reading `state.outputs` to find the latest CodeAuthor artifact and
-renaming/copying it to `lesson.ipynb` in the run directory. The `manifest.json` format
-should be extended with `routing_log` entries for auditability.
+Changes made:
+- `forged/cli.py`: Added agentic subcommand with arg parsing
+- `forged/cli.py`: Implemented `_cmd_agentic()` that invokes `run_pipeline()`
+- `forged/logging_config.py`: Centralized logging setup
+- Output: lesson.ipynb, SUMMARY.md with routing log, pipeline.log with trace
+- Tests: `test_agentic_cli_runs_pipeline()`, `test_agentic_cli_writes_summary_with_routing_log()`
 
 ---
 

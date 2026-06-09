@@ -95,13 +95,16 @@ There are two ways the pipeline can run:
 planner → code_author → executor → student → reviser. This is the path powering everything
 above.
 
-**Agentic (experimental):** `await forged.pipeline.run_pipeline(state, store)` is a
-LangGraph-based pipeline that classifies failures and reroutes to the appropriate agent
-rather than always running the full sequence. Phases 1–6 are complete (285 tests, 88%
-coverage, end-to-end validated with OpenAI). Known limitations: the executor is still
-mocked, the reviser routes but does not rewrite, and there is no CLI flag yet.
+**Agentic (production-ready):** `forged agentic --brief "..." --run-dir /path` is a
+LangGraph-based pipeline that classifies failures, reroutes to the appropriate agent,
+and provides structured feedback for intelligent iteration. Phases 1–9 complete (290 tests,
+88%+ coverage, end-to-end validated with OpenAI). Features:
+  - **Phase 7**: Real executor detects code failures
+  - **Phase 8**: Revision brief provides agent feedback for smart rerouting
+  - **Phase 9**: CLI command with detailed logging and audit trail
+  - **Monitoring**: Full routing log in SUMMARY.md, execution trace in pipeline.log
 
-For the full status, capabilities, limitations, and roadmap see
+For detailed status, capabilities, and testing guide see [TEST.md](TEST.md) and
 [docs/architecture/07-agentic-pipeline-status.md](docs/architecture/07-agentic-pipeline-status.md).
 
 ## Developing
