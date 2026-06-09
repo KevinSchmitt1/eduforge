@@ -100,9 +100,9 @@ class CodeAuthorAgent(Agent[AgentOutput]):
         parts = [f"Lesson Plan:\n{plan_content}"]
         if profile_content:
             parts.append(f"Learner Profile:\n{profile_content}")
-        feedback = self._extract_routing_feedback(state)
-        if feedback:
-            parts.append(f"Previous feedback to address:\n{feedback}")
+        revision_brief = self._read_revision_brief(state, store)
+        if revision_brief:
+            parts.append(f"Feedback from previous attempt:\n{revision_brief}")
         return "\n\n".join(parts)
 
     def _latest_plan_name(self, state: PipelineState) -> str:
@@ -111,8 +111,12 @@ class CodeAuthorAgent(Agent[AgentOutput]):
                 return output.artifact_name
         return f"lesson_plan_v{state.iteration}"
 
-    def _extract_routing_feedback(self, state: PipelineState) -> str:
-        if not state.routing_log:
-            return ""
-        last = state.routing_log[-1]
-        return last.reason
+    def _read_revision_brief(self, state: PipelineState, store: ArtifactStore) -> str:
+        """Read revision_brief artifact if available (feedback from reviser)."""
+        brief_name = f"revision_brief_v{state.iteration - 1}"
+        if store.has(brief_name):
+            try:
+                return store.get(brief_name).content
+            except Exception as exc:
+                _LOG.warning("Failed to read revision brief %s: %s", brief_name, exc)
+        return ""

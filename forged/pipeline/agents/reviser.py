@@ -2,11 +2,14 @@
 
 Persona: personas/reviser.md
 Input artifacts: execution_report_v{N}.json, student_grade_report_v{N}.json
-Output: state update only (routing_log entry or is_terminal flag; no artifact)
+Output: revision_brief_v{N}.md (structured feedback for rerouted agents)
+Output: state update with routing_log entry or is_terminal flag
 Next stage: None (state.routing_log[-1].to_stage determines routing)
 
 This agent is the only one that modifies routing_log.  It delegates to the
 deterministic classify() + Router.route() stack — no LLM calls needed here.
+When rerouting, writes revision_brief artifact with failure context for the
+next agent to read and improve its output.
 A RoutingBudget can be injected at construction for testing.
 """
 
@@ -44,6 +47,8 @@ class RevisorAgent(Agent[AgentOutput]):
         return None
 
     async def run(self, state: PipelineState, store: ArtifactStore) -> PipelineState:
+        from forged.artifacts import Artifact
+
         exec_report = self._read_execution_report(state, store)
         grade_report = self._read_grade_report(state, store)
         classification = classify(exec_report, grade_report)
@@ -59,6 +64,14 @@ class RevisorAgent(Agent[AgentOutput]):
             raise RuntimeError("Router returned non-terminal result with no routing_decision")
         if result.next_stage is None:
             raise RuntimeError("Router returned non-terminal result with no next_stage")
+
+        brief = self._synthesize_revision_brief(
+            exec_report, grade_report, classification, result.next_stage
+        )
+        brief_name = f"revision_brief_v{state.iteration}"
+        store.put(Artifact(name=brief_name, kind="text", content=brief))
+        _LOG.info(f"RevisorAgent: wrote {brief_name}; routing to {result.next_stage.value}")
+
         new_state = state.with_routing_decision(result.routing_decision)
         new_state = new_state.with_attempt(result.next_stage)
         return new_state.with_current_stage(result.next_stage)
@@ -123,6 +136,51 @@ class RevisorAgent(Agent[AgentOutput]):
             if output.stage == stage:
                 return output.artifact_name
         return f"{fallback_prefix}_v{state.iteration}"
+
+    def _synthesize_revision_brief(
+        self,
+        exec_report: ExecutionReport | None,
+        grade_report: GradeReport | None,
+        classification,
+        next_stage: PipelineStage,
+    ) -> str:
+        """Create structured feedback artifact for rerouted agents.
+
+        This brief tells the next agent (CodeAuthor or Planner) what failed
+        and why it's being rerouted. Agents read this to improve their output.
+        """
+        lines = ["# Revision Brief\n"]
+        lines.append(f"**Classification**: {classification.category.value}\n")
+        lines.append(f"**Reason**: {classification.reason}\n")
+        lines.append(f"**Next Stage**: {next_stage.value}\n\n")
+
+        if exec_report:
+            lines.append("## Execution Report\n")
+            lines.append(f"- **Status**: {'✓ OK' if exec_report.ok else '✗ FAILED'}\n")
+            if exec_report.failed_cells:
+                lines.append(f"- **Failed Cells**: {', '.join(map(str, exec_report.failed_cells))}\n")
+            if exec_report.error_summary:
+                lines.append(f"- **Error**: {exec_report.error_summary}\n")
+            lines.append("\n")
+
+        if grade_report:
+            lines.append("## Quality Report\n")
+            lines.append(f"- **Score**: {grade_report.quality_score}/100\n")
+            if grade_report.findings:
+                lines.append("- **Key Findings**:\n")
+                for finding in grade_report.findings[:5]:
+                    lines.append(f"  - [{finding.severity}] {finding.text}\n")
+            lines.append("\n")
+
+        lines.append("## Action Items\n")
+        if next_stage == PipelineStage.CODE_AUTHOR:
+            lines.append("- Fix the code failures listed above\n")
+            lines.append("- Ensure all cells execute without error\n")
+        elif next_stage == PipelineStage.PLANNER:
+            lines.append("- Revise the lesson structure and learning objectives\n")
+            lines.append("- Address the quality gaps identified above\n")
+
+        return "".join(lines)
 
     def _coerce_location_type(self, raw_type: str | None) -> LocationType:
         """Accept slightly looser external labels from LLM output.

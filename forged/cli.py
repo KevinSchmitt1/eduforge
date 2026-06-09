@@ -64,6 +64,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_clean(args)
     if args.command == "pipelines":
         return _cmd_pipelines(args)
+    if args.command == "agentic":
+        return _cmd_agentic(args)
     return _cmd_build(args)
 
 
@@ -210,6 +212,110 @@ def _confirm_delete(count: int, keep: int) -> bool:
     return True
 
 
+def _cmd_agentic(args) -> int:
+    """Run the agentic pipeline with agent iteration and rerouting.
+
+    Invokes run_pipeline() with structured feedback loop so agents can
+    iterate on failures (Phase 8-9).
+    """
+    import asyncio
+    import logging
+    from datetime import datetime
+
+    from .artifacts import ArtifactStore
+    from .logging_config import setup_logging
+    from .pipeline.graph import run_pipeline
+    from .pipeline.state import create_initial_state
+
+    brief = (args.brief or "").strip()
+    if not brief:
+        print("✗ --brief must not be empty", file=sys.stderr)
+        return EXIT_USAGE
+
+    run_dir = Path(args.run_dir)
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    setup_logging(debug=args.debug, log_file=run_dir / "pipeline.log")
+    logger = logging.getLogger(__name__)
+
+    personas_dir = Path(args.personas)
+    if not personas_dir.is_dir():
+        print(f"✗ personas directory not found: {personas_dir}", file=sys.stderr)
+        return EXIT_RUNTIME
+
+    _load_dotenv(Path.cwd() / ".env")
+    _load_dotenv(PACKAGE_ROOT / ".env")
+
+    logger.info("Agentic pipeline starting (run_dir=%s)", run_dir)
+    start_time = datetime.now()
+
+    try:
+        store = ArtifactStore(run_dir)
+        from .artifacts import Artifact
+
+        store.put(Artifact(name="brief", kind="text", content=brief))
+
+        state = create_initial_state(run_id=run_dir.name)
+        logger.info("Initial state created (run_id=%s, iteration=0)", state.run_id)
+
+        final_state = asyncio.run(run_pipeline(state, store, personas_dir))
+
+        elapsed_sec = (datetime.now() - start_time).total_seconds()
+        logger.info("Pipeline complete (terminal=%s, elapsed=%.1fs)", final_state.is_terminal, elapsed_sec)
+
+        _write_agentic_summary(run_dir, final_state, elapsed_sec)
+        _write_final_notebook(run_dir, store, final_state)
+
+        if final_state.is_terminal:
+            print(f"\n✓ Agentic pipeline complete — open {run_dir / 'lesson.ipynb'}")
+            print(f"  summary  {run_dir / 'SUMMARY.md'}")
+            return EXIT_OK
+        else:
+            print(f"\n⚠ Pipeline did not terminate — check {run_dir / 'SUMMARY.md'}")
+            return EXIT_RUNTIME
+
+    except Exception as exc:
+        logger.exception("Agentic pipeline failed: %s", exc)
+        print(f"\n✗ Pipeline failed: {exc}", file=sys.stderr)
+        return EXIT_RUNTIME
+
+
+def _write_agentic_summary(run_dir: Path, state, elapsed_sec: float) -> None:
+    """Write SUMMARY.md with routing log for agentic pipeline."""
+    from datetime import datetime
+
+    lines = ["# Agentic Pipeline Summary\n\n"]
+    lines.append(f"**Status**: {'✓ Acceptable' if state.is_terminal else '✗ Incomplete'}\n")
+    if state.terminal_reason:
+        lines.append(f"**Reason**: {state.terminal_reason}\n")
+    lines.append(f"**Elapsed**: {elapsed_sec:.1f} seconds\n")
+    lines.append(f"**Iterations**: {state.iteration}\n\n")
+
+    if state.routing_log:
+        lines.append("## Routing Log\n\n")
+        for i, decision in enumerate(state.routing_log, 1):
+            lines.append(f"### Iteration {decision.iteration}\n")
+            lines.append(f"- **From**: {decision.from_stage.value}\n")
+            lines.append(f"- **To**: {decision.to_stage.value if decision.to_stage else 'END'}\n")
+            lines.append(f"- **Classification**: {decision.classification}\n")
+            lines.append(f"- **Reason**: {decision.reason}\n\n")
+
+    (run_dir / "SUMMARY.md").write_text("".join(lines), encoding="utf-8")
+
+
+def _write_final_notebook(run_dir: Path, store, state) -> None:
+    """Extract the latest lesson notebook from artifacts and write to lesson.ipynb."""
+    from .pipeline.state import PipelineStage
+
+    for output in reversed(state.outputs):
+        if output.stage == PipelineStage.CODE_AUTHOR:
+            notebook_content = store.get(output.artifact_name).content
+            (run_dir / "lesson.ipynb").write_text(notebook_content, encoding="utf-8")
+            return
+
+    (run_dir / "lesson.ipynb").write_text("[]", encoding="utf-8")
+
+
 def _cmd_pipelines(args) -> int:
     """List the bundled pipeline configs so users can discover them without ls'ing
     the package directory."""
@@ -287,6 +393,23 @@ def _build_parser() -> argparse.ArgumentParser:
     build.add_argument("--personas", default=str(DEFAULT_PERSONAS), help=argparse.SUPPRESS)
 
     sub.add_parser("pipelines", help="List the bundled pipeline configs")
+
+    agentic = sub.add_parser("agentic", help="Run the agentic pipeline with agent iteration")
+    agentic.add_argument(
+        "--brief", required=True,
+        help="Lesson topic/brief (e.g., 'Teach me how hash maps work')",
+    )
+    agentic.add_argument(
+        "--run-dir", type=Path, required=True,
+        help="Output directory for lesson notebook and metadata",
+    )
+    agentic.add_argument(
+        "--debug", action="store_true",
+        help="Enable DEBUG logging (shows detailed pipeline activity)",
+    )
+    agentic.add_argument(
+        "--personas", default=str(DEFAULT_PERSONAS), help=argparse.SUPPRESS
+    )
 
     clean = sub.add_parser("clean", help="Prune old run directories (manual, confirmed)")
     clean.add_argument(

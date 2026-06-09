@@ -565,6 +565,90 @@ def test_graph_handles_missing_artifact(
 
 
 @pytest.mark.integration
+def test_reviser_writes_revision_brief(
+    personas_dir: Path, artifact_store: ArtifactStore, initial_state: PipelineState
+) -> None:
+    """Reviser writes revision_brief artifact containing failure context for rerouted agents.
+
+    This test verifies Phase 8: when the reviser reroutes to an agent,
+    it writes a revision_brief with execution/grade context.
+    """
+    from forged.pipeline.agents.code_author import CodeAuthorAgent
+    from forged.pipeline.agents.executor import ExecutorAgent
+    from forged.pipeline.agents.planner import PlannerAgent
+    from forged.pipeline.agents.student import StudentAgent
+    from forged.pipeline.graph import run_pipeline
+
+    call_count = {"code_author": 0}
+
+    def planner_run(state: PipelineState, store: ArtifactStore) -> PipelineState:
+        store.put(Artifact(name=f"lesson_plan_v{state.iteration}", kind="text", content="Plan"))
+        output = StageOutput(
+            stage=PipelineStage.PLANNER,
+            artifact_name=f"lesson_plan_v{state.iteration}",
+            iteration=state.iteration,
+        )
+        return state.with_output(output).with_current_stage(PipelineStage.CODE_AUTHOR)
+
+    def code_author_run(state: PipelineState, store: ArtifactStore) -> PipelineState:
+        import nbformat
+
+        call_count["code_author"] += 1
+        notebook = nbformat.v4.new_notebook()
+        source_code = (
+            "print('hello')" if call_count["code_author"] > 1 else "undefined_variable_that_fails"
+        )
+        notebook.cells = [
+            nbformat.v4.new_markdown_cell("# Test"),
+            nbformat.v4.new_code_cell(source_code),
+        ]
+        store.put(
+            Artifact(
+                name=f"lesson_notebook_v{state.iteration}",
+                kind="notebook",
+                content=nbformat.writes(notebook),
+            )
+        )
+        output = StageOutput(
+            stage=PipelineStage.CODE_AUTHOR,
+            artifact_name=f"lesson_notebook_v{state.iteration}",
+            iteration=state.iteration,
+        )
+        return state.with_output(output).with_current_stage(PipelineStage.EXECUTOR)
+
+    def student_run(state: PipelineState, store: ArtifactStore) -> PipelineState:
+        grade_report = json.dumps({"quality_score": 90.0, "blockers": [], "findings": []})
+        store.put(
+            Artifact(
+                name=f"student_grade_report_v{state.iteration}", kind="json", content=grade_report
+            )
+        )
+        output = StageOutput(
+            stage=PipelineStage.STUDENT,
+            artifact_name=f"student_grade_report_v{state.iteration}",
+            iteration=state.iteration,
+        )
+        return state.with_output(output).with_current_stage(PipelineStage.REVISER)
+
+    with (
+        patch.object(PlannerAgent, "run", AsyncMock(side_effect=planner_run)),
+        patch.object(CodeAuthorAgent, "run", AsyncMock(side_effect=code_author_run)),
+        patch.object(StudentAgent, "run", AsyncMock(side_effect=student_run)),
+    ):
+        final_state = asyncio.get_event_loop().run_until_complete(
+            run_pipeline(initial_state, artifact_store, personas_dir)
+        )
+
+    assert final_state.is_terminal, "Pipeline should terminate"
+    assert call_count["code_author"] >= 2, "CodeAuthor should have been called twice"
+    assert artifact_store.has(
+        "revision_brief_v0"
+    ), "Reviser should have written revision_brief_v0 on reroute"
+    brief_content = artifact_store.get("revision_brief_v0").content
+    assert "code_quality" in brief_content.lower() or "classification" in brief_content.lower()
+
+
+@pytest.mark.integration
 def test_real_executor_detects_code_quality_failure(
     personas_dir: Path, artifact_store: ArtifactStore
 ) -> None:

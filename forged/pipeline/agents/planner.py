@@ -4,16 +4,22 @@ Persona: personas/planner.md
 Input artifacts: (none required; reads from state metadata or uses defaults)
 Output artifact: lesson_plan_v{iteration}.md  (kind=text)
 Next stage: CODE_AUTHOR
+
+Phase 8: When rerouted from Reviser, reads revision_brief_v{N}.md to understand
+what structural or pedagogical issues need fixing.
 """
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from forged.artifacts import Artifact, ArtifactStore
 from forged.pipeline.state import PipelineStage, PipelineState, StageOutput
 
 from . import Agent, AgentOutput
+
+_LOG = logging.getLogger(__name__)
 
 
 class PlannerAgent(Agent[AgentOutput]):
@@ -58,4 +64,17 @@ class PlannerAgent(Agent[AgentOutput]):
             lines.append(f"\nBrief:\n{store.get('brief').content}")
         if store.has("profile"):
             lines.append(f"\nProfile:\n{store.get('profile').content}")
+        revision_brief = self._read_revision_brief(state, store)
+        if revision_brief:
+            lines.append(f"\nFeedback from previous attempt:\n{revision_brief}")
         return "\n".join(lines)
+
+    def _read_revision_brief(self, state: PipelineState, store: ArtifactStore) -> str:
+        """Read revision_brief artifact if available (feedback from reviser)."""
+        brief_name = f"revision_brief_v{state.iteration - 1}"
+        if store.has(brief_name):
+            try:
+                return store.get(brief_name).content
+            except Exception as exc:
+                _LOG.warning("Failed to read revision brief %s: %s", brief_name, exc)
+        return ""
