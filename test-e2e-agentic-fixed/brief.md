@@ -1,1 +1,0 @@
-Teach me how list comprehensions work in Python

@@ -38,11 +38,11 @@ jobs:
         run: python -m ipykernel install --user --name python3
 
       - name: Lint (ruff)
-        run: ruff check eduforge tests
+        run: ruff check forged tests
 
       - name: Type check (mypy)
         run: mypy
 
       - name: Tests + coverage
         # --cov-fail-under enforces the project's 80% minimum.
-        run: pytest --cov=eduforge --cov-report=term-missing --cov-fail-under=80
+        run: pytest --cov=forged --cov-report=term-missing --cov-fail-under=80
