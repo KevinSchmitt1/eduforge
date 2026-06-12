@@ -1,4 +1,4 @@
-# Eduforge Agentic Pipeline — Implementation Design
+# forgeducation Agentic Pipeline — Implementation Design
 
 **For:** Building the core pipeline modules with clean architecture, testability, and maintainability in mind.
 

@@ -1,4 +1,4 @@
-# Eduforge Agentic Pipeline — Implementation Plan
+# forgeducation Agentic Pipeline — Implementation Plan
 
 **Status:** COMPLETE (Phases 1–6, as of 2026-06-09)  
 **Target:** 6 phases, 80%+ test coverage, end-to-end pipeline execution  
