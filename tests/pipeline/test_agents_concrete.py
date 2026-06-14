@@ -62,6 +62,22 @@ def initial_state() -> PipelineState:
 
 
 @pytest.fixture
+def stub_llm_client():
+    """Offline LLM client returning a canned plan, so run() needs no API key.
+
+    PlannerAgent re-raises on LLM failure (unlike CodeAuthor/Student, which
+    degrade to fallbacks), so its run() tests must inject a client rather than
+    reach the network — these are unit tests, not live API calls.
+    """
+
+    class _StubClient:
+        def complete(self, system_prompt: str, user_prompt: str) -> str:
+            return "# Lesson Plan\n\n## Objectives\n- Understand the topic"
+
+    return _StubClient()
+
+
+@pytest.fixture
 def state_with_plan(artifact_store: ArtifactStore) -> PipelineState:
     """Pipeline state after planner ran — has a lesson_plan artifact."""
     state = create_initial_state(run_id="test-run-002")
@@ -222,11 +238,12 @@ def test_planner_agent_run_updates_stage(
     personas_dir: Path,
     initial_state: PipelineState,
     artifact_store: ArtifactStore,
+    stub_llm_client,
 ) -> None:
     """PlannerAgent.run() returns a state with current_stage=CODE_AUTHOR."""
     from forged.pipeline.agents.planner import PlannerAgent
 
-    agent = PlannerAgent(personas_dir=personas_dir)
+    agent = PlannerAgent(personas_dir=personas_dir, llm_client=stub_llm_client)
     result = asyncio.get_event_loop().run_until_complete(
         agent.run(initial_state, artifact_store)
     )
@@ -238,11 +255,12 @@ def test_planner_agent_run_adds_output(
     personas_dir: Path,
     initial_state: PipelineState,
     artifact_store: ArtifactStore,
+    stub_llm_client,
 ) -> None:
     """PlannerAgent.run() returns a state with outputs list increased by 1."""
     from forged.pipeline.agents.planner import PlannerAgent
 
-    agent = PlannerAgent(personas_dir=personas_dir)
+    agent = PlannerAgent(personas_dir=personas_dir, llm_client=stub_llm_client)
     result = asyncio.get_event_loop().run_until_complete(
         agent.run(initial_state, artifact_store)
     )
@@ -254,13 +272,14 @@ def test_planner_agent_run_is_immutable(
     personas_dir: Path,
     initial_state: PipelineState,
     artifact_store: ArtifactStore,
+    stub_llm_client,
 ) -> None:
     """PlannerAgent.run() never mutates the input state."""
     from forged.pipeline.agents.planner import PlannerAgent
 
     original_stage = initial_state.current_stage
     original_outputs_count = len(initial_state.outputs)
-    agent = PlannerAgent(personas_dir=personas_dir)
+    agent = PlannerAgent(personas_dir=personas_dir, llm_client=stub_llm_client)
     asyncio.get_event_loop().run_until_complete(agent.run(initial_state, artifact_store))
     assert initial_state.current_stage == original_stage
     assert len(initial_state.outputs) == original_outputs_count
@@ -271,11 +290,12 @@ def test_planner_agent_run_writes_artifact(
     personas_dir: Path,
     initial_state: PipelineState,
     artifact_store: ArtifactStore,
+    stub_llm_client,
 ) -> None:
     """PlannerAgent.run() writes a lesson plan artifact to the store."""
     from forged.pipeline.agents.planner import PlannerAgent
 
-    agent = PlannerAgent(personas_dir=personas_dir)
+    agent = PlannerAgent(personas_dir=personas_dir, llm_client=stub_llm_client)
     result = asyncio.get_event_loop().run_until_complete(
         agent.run(initial_state, artifact_store)
     )
@@ -728,11 +748,12 @@ def test_planner_output_stage_matches(
     personas_dir: Path,
     initial_state: PipelineState,
     artifact_store: ArtifactStore,
+    stub_llm_client,
 ) -> None:
     """PlannerAgent output StageOutput.stage == PipelineStage.PLANNER."""
     from forged.pipeline.agents.planner import PlannerAgent
 
-    agent = PlannerAgent(personas_dir=personas_dir)
+    agent = PlannerAgent(personas_dir=personas_dir, llm_client=stub_llm_client)
     result = asyncio.get_event_loop().run_until_complete(
         agent.run(initial_state, artifact_store)
     )

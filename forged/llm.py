@@ -30,11 +30,25 @@ class LLMClient:
 
     def __init__(self, config: ModelConfig):
         self._config = config
-        self._client = (
-            OpenAI(**_connection_kwargs(config.provider))
-            if OpenAI is not None
-            else None
-        )
+        self._client: OpenAI | None = None
+
+    def _ensure_client(self) -> OpenAI:
+        """Build the SDK client on first use.
+
+        Lazy on purpose: constructing agents (and therefore LLMClient) must not
+        require credentials — the offline test suite builds real agents with no
+        API key. The key is resolved only when a completion is actually requested,
+        and a missing key still fails with the same actionable message.
+        """
+        if self._client is not None:
+            return self._client
+        if OpenAI is None:
+            raise RuntimeError(
+                "The openai package is not installed. Install it to run LLM-backed "
+                "stages, or switch the pipeline to a local/non-LLM path."
+            )
+        self._client = OpenAI(**_connection_kwargs(self._config.provider))
+        return self._client
 
     def complete(self, system_prompt: str, user_prompt: str) -> str:
         """Run a single system+user chat completion and return the text.
@@ -42,11 +56,7 @@ class LLMClient:
         Raises RuntimeError with context on any API failure so the orchestrator
         can report which stage broke and why.
         """
-        if self._client is None:
-            raise RuntimeError(
-                "The openai package is not installed. Install it to run LLM-backed "
-                "stages, or switch the pipeline to a local/non-LLM path."
-            )
+        client = self._ensure_client()
         messages: list = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -56,14 +66,14 @@ class LLMClient:
         # endpoint still expects `max_tokens`, so pick per provider.
         try:
             if self._config.provider is Provider.OLLAMA:
-                response = self._client.chat.completions.create(
+                response = client.chat.completions.create(
                     model=self._config.model,
                     temperature=self._config.temperature,
                     max_tokens=self._config.max_tokens,
                     messages=messages,
                 )
             else:
-                response = self._client.chat.completions.create(
+                response = client.chat.completions.create(
                     model=self._config.model,
                     temperature=self._config.temperature,
                     max_completion_tokens=self._config.max_tokens,
